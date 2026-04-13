@@ -1,0 +1,213 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage[table]{xcolor}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+
+\definecolor{ReportBlue}{HTML}{1F4E79}
+\definecolor{ReportTeal}{HTML}{1E847F}
+\definecolor{ReportGray}{HTML}{F4F6F8}
+\definecolor{ReportLine}{HTML}{D7DEE3}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=ReportBlue,
+  urlcolor=ReportTeal,
+  pdftitle={Skill-JEPA-WM Locked Protocol Progress Report},
+  pdfauthor={Codex}
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\textcolor{ReportBlue}{Skill-JEPA-WM Locked Progress}}
+\fancyhead[R]{2026-04-11}
+\fancyfoot[C]{\thepage}
+\setlength{\headheight}{14pt}
+\setlist[itemize]{leftmargin=1.5em, itemsep=0.35em, topsep=0.4em}
+
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+
+\begin{document}
+
+\begin{center}
+{\LARGE\bfseries \textcolor{ReportBlue}{Skill-JEPA-WM Locked Protocol Progress Report}}\\[0.5em]
+{\large Push-T Locked Suite Status in \texttt{jepa-wms}}\\[0.4em]
+{\normalsize Scope: reevaluation and incompleteness closure before scaled pilot}
+\end{center}
+
+\vspace{0.75em}
+
+\noindent
+\fcolorbox{ReportLine}{ReportGray}{
+\begin{minipage}{0.97\linewidth}
+\textbf{Executive Summary.}
+This round completed the first locked-suite deliverable: a cache-consistent, deterministic, 100-episode reevaluation of the current best Push-T checkpoint under the frozen protocol.
+The hierarchical and flat planners tied on success rate at \textbf{7\%}, but the hierarchical planner improved mean pose distance from \textbf{355.30} to \textbf{264.43}, reduced average planning latency from \textbf{0.564 s} to \textbf{0.249 s}, and beat flat on \textbf{57\%} of episodes.
+In parallel, I fixed the remaining implementation gaps that blocked the scaled pilot: full Push-T pixel decoding, projector-consistent cache generation, exact episode-count cache slicing, a random-skill hierarchical baseline, and locked-suite artifact export.
+The 3-seed scaled pilot itself is still incomplete, so no continue/stop decision has been issued for the hierarchy line and no feasibility critic has been added.
+\end{minipage}
+}
+
+\section*{1. Locked Scope For This Round}
+
+The user request for this round froze the protocol to the corrected report settings:
+
+\begin{itemize}
+\item frozen V-JEPA2 cache,
+\item \(K = 4\),
+\item \texttt{control\_horizon = 32},
+\item \texttt{goal\_gap = 24},
+\item \texttt{execute\_actions\_per\_plan = 4},
+\item cache-consistent online evaluation,
+\item deterministic per-episode reseeding.
+\end{itemize}
+
+The same request also fixed the experimental boundary:
+
+\begin{itemize}
+\item do not add new architecture, loss, or dataset,
+\item do not touch DROID,
+\item re-evaluate the current best checkpoint first,
+\item only add a subgoal feasibility critic if the scaled hierarchy advantage survives.
+\end{itemize}
+
+\section*{2. What Was Finished}
+
+\subsection*{2.1 Current Best Checkpoint Reevaluation}
+
+I reran the current best Push-T debug checkpoint on \textbf{100 evaluation episodes} under the locked online evaluator and compared hierarchical vs.\ flat planning from the same checkpoint.
+
+\begin{center}
+\begin{tabular}{lrrrr}
+\toprule
+\rowcolor{ReportBlue!10}
+Method & Success & Pose Dist. & Planning Latency & Notes \\
+\midrule
+Hierarchical & 0.07 & 264.43 & 0.249 s & same checkpoint \\
+Flat & 0.07 & 355.30 & 0.564 s & same checkpoint \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Additional comparison summary:
+
+\begin{itemize}
+\item hierarchical better-than-flat rate by pose distance: \textbf{0.57},
+\item representative rollout GIFs were saved for both planners,
+\item per-episode records were exported to CSV.
+\end{itemize}
+
+\subsection*{2.2 Incompletenesses Closed Before Scaling}
+
+The main value of this round was not only the reevaluation result.
+It was closing the implementation gaps that would have invalidated or blocked the scaled suite.
+
+\begin{itemize}
+\item \textbf{Full Push-T read path.} Registered \texttt{hdf5plugin} so the blosc-compressed \texttt{pixels} dataset in the full HDF5 can be read locally.
+\item \textbf{Cache consistency.} Reused the frozen projector checkpoint during cache building instead of silently creating a new random projector.
+\item \textbf{Scaled cache slicing.} Added exact episode-count trimming via \texttt{max\_episodes} so the cache builder can produce the requested \(12\text{k train} / 1024\text{ val}\) source layout.
+\item \textbf{Random baseline.} Added a random-skill hierarchical high-level planner so \texttt{random\_skill\_hier\_10pct} can be evaluated under the same locked suite.
+\item \textbf{Artifact export.} Extended the online evaluator to emit per-episode CSV and rollout GIF artifacts for the locked suite.
+\item \textbf{Suite entrypoint.} Added a single runner script that prepares configs, launches training and evaluation jobs, and aggregates the scaled suite outputs.
+\end{itemize}
+
+\section*{3. Files Added Or Updated}
+
+The main code and artifact paths produced in this round were:
+
+\begin{itemize}
+\item \texttt{src/skill\_jepa/analysis/eval\_pusht\_online.py}
+\item \texttt{src/skill\_jepa/planning/random\_high\_level.py}
+\item \texttt{src/skill\_jepa/planning/\_\_init\_\_.py}
+\item \texttt{tools/cache\_vjepa\_features.py}
+\item \texttt{tools/run\_skill\_jepa\_pusht\_locked\_suite.py}
+\item \texttt{outputs/skill\_jepa/pusht\_locked\_suite/evals/current\_best\_checkpoint\_100ep/pusht\_online\_eval.json}
+\item \texttt{outputs/skill\_jepa/pusht\_locked\_suite/evals/current\_best\_checkpoint\_100ep/pusht\_online\_records.csv}
+\item \texttt{outputs/skill\_jepa/pusht\_locked\_suite/reports/current\_best\_checkpoint\_comparison.csv}
+\end{itemize}
+
+\section*{4. What Is Still Incomplete}
+
+The locked scaled pilot has \textbf{not} been completed yet.
+That means the following deliverables are still missing for the scaled suite itself:
+
+\begin{itemize}
+\item the full 3-seed training runs on the five requested configurations,
+\item aggregate CSV over the scaled pilot,
+\item scaled-suite plots,
+\item scaled-suite rollout exports,
+\item \texttt{decision\_report.md} with a valid continue/stop recommendation,
+\item any feasibility-critic implementation or rerun.
+\end{itemize}
+
+This stop point was deliberate.
+The scaled pilot should not be claimed complete until the actual 3-seed locked runs finish.
+
+\section*{5. Why The Scaled Pilot Was Not Finished In This Round}
+
+I measured the local path before launching the long run.
+Using the current local RTX 4070 8GB throughput, the locked suite is large enough that it no longer fits inside a normal interactive turn:
+
+\begin{center}
+\begin{tabular}{lr}
+\toprule
+Estimated Component & Local Time \\
+\midrule
+Full 13,024-episode cache build & 8.97 h \\
+Per-seed training total & 19.93 h \\
+3-seed locked suite total & 68.75 h \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+That estimate is large enough to change the execution regime.
+It also means the absence of scaled results is a true missing result, not a hidden success.
+
+\section*{6. Interpretation Of The New 100-Episode Result}
+
+The new reevaluation materially weakens the earlier short-run headline.
+On the larger 100-episode test:
+
+\begin{itemize}
+\item hierarchy keeps a meaningful pose-distance advantage,
+\item hierarchy keeps a large latency advantage,
+\item hierarchy does \textbf{not} improve success rate over flat on the current best debug checkpoint.
+\end{itemize}
+
+So the current evidence supports this narrower claim:
+
+\begin{quote}
+Under the locked debug checkpoint, hierarchy improves control quality and planning efficiency, but the stronger claim that hierarchy improves success rate is not supported by the 100-episode reevaluation.
+\end{quote}
+
+That is exactly why the scaled pilot remains necessary before any new model component is added.
+
+\section*{7. Immediate Next Step}
+
+The next valid step is:
+
+\begin{itemize}
+\item run the full locked 3-seed scaled Push-T suite,
+\item aggregate the five requested configuration results,
+\item issue a continue/stop recommendation from those scaled numbers,
+\item add the feasibility critic only if the hierarchy advantage survives that scaled comparison.
+\end{itemize}
+
+\section*{8. Bottom Line}
+
+This round completed the locked reevaluation and the missing plumbing needed for the scaled suite.
+It did \textbf{not} complete the scaled suite itself.
+The current best debug checkpoint still shows hierarchical value, but only as a distance and latency advantage.
+The line should remain frozen until the scaled pilot produces the actual continue/stop evidence.
+
+\end{document}

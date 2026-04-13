@@ -1,0 +1,84 @@
+seed: 7
+device: cuda
+
+encoder:
+  model_id: facebook/vjepa2-vitl-fpc64-256
+  dtype: bfloat16
+  state_dim: 384
+  pool_grid: 4
+
+data:
+  raw_h5_path: data/pusht_expert_train.h5.debug.bak
+  cache_path: outputs/skill_jepa/pusht_debug/cache/pusht_vjepa2_cache.h5
+  projector_ckpt: outputs/skill_jepa/pusht_debug/cache/state_projector.pt
+  max_steps: 320
+  cache_batch_size: 2
+  save_patch_tokens: false
+  batch_size: 16
+  num_workers: 0
+  stride: 2
+  val_stride: 4
+  labeled_fraction: 0.1
+  val_fraction: 0.05
+  test_fraction: 0.05
+
+model:
+  skill_dim: 8
+  hidden_dim: 384
+  wm_hidden_dim: 512
+  wm_depth: 4
+  action_hidden_dim: 128
+  low_level_hidden_dim: 512
+  low_level_depth: 4
+  low_level_heads: 4
+
+training:
+  chunk_size: 4
+  rollout_chunks: 3
+  low_rollout_steps: 4
+  epochs: 4
+  lr: 1.0e-4
+  weight_decay: 0.05
+  grad_clip: 1.0
+  log_every: 5
+  rollout_warmup_steps: 0
+  rollout_ramp_steps: 100
+  passive_output_dir: outputs/skill_jepa/pusht_debug/passive
+  passive_checkpoint: outputs/skill_jepa/pusht_debug/passive/passive_best.pt
+  low_level_output_dir: outputs/skill_jepa/pusht_debug/low_level
+  low_level_checkpoint: outputs/skill_jepa/pusht_debug/low_level/low_level_best.pt
+  joint_output_dir: outputs/skill_jepa/pusht_debug/joint
+
+loss:
+  skill_end_weight: 1.0
+  skill_roll_weight: 1.0
+  effect_weight: 0.1
+  composition_weight: 0.1
+  kl_weight: 0.001
+  align_weight: 0.5
+  action_skill_weight: 0.5
+  low_level_weight: 1.0
+  low_roll_weight: 1.0
+
+planner:
+  goal_gap: 24
+  num_eval_episodes: 8
+  max_episode_steps: 32
+  high_level_horizon: 4
+  high_level_population: 64
+  high_level_elites: 8
+  high_level_iters: 4
+  high_level_skill_penalty: 0.05
+  high_level_prior_penalty: 0.1
+  low_level_horizon: 4
+  low_level_population: 128
+  low_level_elites: 16
+  low_level_iters: 4
+  low_level_skill_penalty: 2.0
+  action_penalty: 0.05
+  flat_horizon: 16
+  execute_actions_per_plan: 4
+  subgoal_spatial_penalty: 1.0
+  subgoal_global_penalty: 0.5
+  flat_spatial_penalty: 1.0
+  flat_global_penalty: 1.0

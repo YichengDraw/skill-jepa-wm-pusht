@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+
+# Editors
+.idea/
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Data and checkpoints
+data/
+outputs/
+*.pt
+*.pth
+*.pth.tar
+*.ckpt
+*.h5
+*.zst
+
+# Logs and generated reports
+*.log
+*.aux
+*.out
+*.synctex.gz
+*.toc
+
+# Keep tracked artifacts
+!artifacts/
+!artifacts/**

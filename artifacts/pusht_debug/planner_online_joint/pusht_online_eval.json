@@ -1,0 +1,197 @@
+{
+  "flat": {
+    "final_latent_distance": 0.010648432325979229,
+    "planning_latency_sec": 0.52521805937522,
+    "records": [
+      {
+        "final_coverage": 0.17450593355568816,
+        "final_latent_distance": 0.01786930114030838,
+        "max_coverage": 0.17450593355568816,
+        "planning_latency_sec": 0.5435807750072854,
+        "skill_consistency": 0.0,
+        "start_latent_distance": 0.00562776904553175,
+        "state_dist": 321.1493225097656,
+        "steps_taken": 32,
+        "success": false
+      },
+      {
+        "final_coverage": 0.17450593355568816,
+        "final_latent_distance": 0.010769973509013653,
+        "max_coverage": 0.17450593355568816,
+        "planning_latency_sec": 0.5203281874964887,
+        "skill_consistency": 0.0,
+        "start_latent_distance": 0.002925004344433546,
+        "state_dist": 313.0252685546875,
+        "steps_taken": 32,
+        "success": false
+      },
+      {
+        "final_coverage": 0.17450593355568816,
+        "final_latent_distance": 0.014617185108363628,
+        "max_coverage": 0.17450593355568816,
+        "planning_latency_sec": 0.5222568249919277,
+        "skill_consistency": 0.0,
+        "start_latent_distance": 0.004484407603740692,
+        "state_dist": 463.59136962890625,
+        "steps_taken": 32,
+        "success": false
+      },
+      {
+        "final_coverage": 0.17450593355568816,
+        "final_latent_distance": 0.01510724239051342,
+        "max_coverage": 0.17450593355568816,
+        "planning_latency_sec": 0.5247601875016699,
+        "skill_consistency": 0.0,
+        "start_latent_distance": 0.016220716759562492,
+        "state_dist": 678.9715576171875,
+        "steps_taken": 32,
+        "success": false
+      },
+      {
+        "final_coverage": 0.17450593355568816,
+        "final_latent_distance": 0.00017876652418635786,
+        "max_coverage": 0.17450593355568816,
+        "planning_latency_sec": 0.5224290750047658,
+        "skill_consistency": 0.0,
+        "start_latent_distance": 0.011859335005283356,
+        "state_dist": 577.2562866210938,
+        "steps_taken": 32,
+        "success": false
+      },
+      {
+        "final_coverage": 0.17450593355568816,
+        "final_latent_distance": 0.00017876652418635786,
+        "max_coverage": 0.17450593355568816,
+        "planning_latency_sec": 0.5246122749995266,
+        "skill_consistency": 0.0,
+        "start_latent_distance": 0.01407458633184433,
+        "state_dist": 214.90435791015625,
+        "steps_taken": 32,
+        "success": false
+      },
+      {
+        "final_coverage": 0.17450593355568816,
+        "final_latent_distance": 0.014422043226659298,
+        "max_coverage": 0.17450593355568816,
+        "planning_latency_sec": 0.5225318000011612,
+        "skill_consistency": 0.0,
+        "start_latent_distance": 0.015558923594653606,
+        "state_dist": 779.4170532226562,
+        "steps_taken": 32,
+        "success": false
+      },
+      {
+        "final_coverage": 0.17450593355568816,
+        "final_latent_distance": 0.012044180184602737,
+        "max_coverage": 0.17450593355568816,
+        "planning_latency_sec": 0.5212453499989351,
+        "skill_consistency": 0.0,
+        "start_latent_distance": 0.0013789432123303413,
+        "state_dist": 331.0671081542969,
+        "steps_taken": 32,
+        "success": false
+      }
+    ],
+    "skill_consistency": 0.0,
+    "state_dist": 459.92279052734375,
+    "success_rate": 0.0
+  },
+  "hierarchical": {
+    "final_latent_distance": 0.009284842766646761,
+    "planning_latency_sec": 0.2120353156242345,
+    "records": [
+      {
+        "final_coverage": 0.17450593355568816,
+        "final_latent_distance": 0.01786930114030838,
+        "max_coverage": 0.17450593355568816,
+        "planning_latency_sec": 0.2211356000007072,
+        "skill_consistency": 0.18829567288048565,
+        "start_latent_distance": 0.00562776904553175,
+        "state_dist": 475.24798583984375,
+        "steps_taken": 32,
+        "success": false
+      },
+      {
+        "final_coverage": 0.17450593355568816,
+        "final_latent_distance": 0.010769973509013653,
+        "max_coverage": 0.17450593355568816,
+        "planning_latency_sec": 0.20820632499817293,
+        "skill_consistency": 0.2701960075646639,
+        "start_latent_distance": 0.002925004344433546,
+        "state_dist": 432.057861328125,
+        "steps_taken": 32,
+        "success": false
+      },
+      {
+        "final_coverage": 0.17450593355568816,
+        "final_latent_distance": 0.014617185108363628,
+        "max_coverage": 0.17450593355568816,
+        "planning_latency_sec": 0.2143248374995892,
+        "skill_consistency": 0.14734425814822316,
+        "start_latent_distance": 0.004484407603740692,
+        "state_dist": 302.739013671875,
+        "steps_taken": 32,
+        "success": false
+      },
+      {
+        "final_coverage": 0.17450593355568816,
+        "final_latent_distance": 0.01510724239051342,
+        "max_coverage": 0.17450593355568816,
+        "planning_latency_sec": 0.21142896249875776,
+        "skill_consistency": 0.17084180936217308,
+        "start_latent_distance": 0.016220716759562492,
+        "state_dist": 293.90972900390625,
+        "steps_taken": 32,
+        "success": false
+      },
+      {
+        "final_coverage": 0.17450593355568816,
+        "final_latent_distance": 0.00017876652418635786,
+        "max_coverage": 0.17450593355568816,
+        "planning_latency_sec": 0.20842569999513216,
+        "skill_consistency": 0.4406255632638931,
+        "start_latent_distance": 0.011859335005283356,
+        "state_dist": 8.592114448547363,
+        "steps_taken": 6,
+        "success": true
+      },
+      {
+        "final_coverage": 0.17450593355568816,
+        "final_latent_distance": 0.00017876652418635786,
+        "max_coverage": 0.17450593355568816,
+        "planning_latency_sec": 0.2131289500030107,
+        "skill_consistency": 0.10918242949992418,
+        "start_latent_distance": 0.01407458633184433,
+        "state_dist": 149.93798828125,
+        "steps_taken": 32,
+        "success": false
+      },
+      {
+        "final_coverage": 0.17450593355568816,
+        "final_latent_distance": 0.014422043226659298,
+        "max_coverage": 0.17450593355568816,
+        "planning_latency_sec": 0.21063470000080997,
+        "skill_consistency": 0.17707717791199684,
+        "start_latent_distance": 0.015558923594653606,
+        "state_dist": 361.9718017578125,
+        "steps_taken": 32,
+        "success": false
+      },
+      {
+        "final_coverage": 0.17450593355568816,
+        "final_latent_distance": 0.0011354637099429965,
+        "max_coverage": 0.17450593355568816,
+        "planning_latency_sec": 0.2089974499976961,
+        "skill_consistency": 0.22946812957525253,
+        "start_latent_distance": 0.0013789432123303413,
+        "state_dist": 12.4270658493042,
+        "steps_taken": 8,
+        "success": true
+      }
+    ],
+    "skill_consistency": 0.21662888102582656,
+    "state_dist": 254.610445022583,
+    "success_rate": 0.25
+  },
+  "hierarchical_better_rate": 0.75
+}

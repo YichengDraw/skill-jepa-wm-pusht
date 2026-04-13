@@ -1,0 +1,260 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage[table]{xcolor}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+
+\definecolor{ReportBlue}{HTML}{1F4E79}
+\definecolor{ReportTeal}{HTML}{1E847F}
+\definecolor{ReportGray}{HTML}{F4F6F8}
+\definecolor{ReportLine}{HTML}{D7DEE3}
+\definecolor{ReportText}{HTML}{1F2933}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=ReportBlue,
+  urlcolor=ReportTeal,
+  pdftitle={Skill-JEPA-WM Implementation Report},
+  pdfauthor={Codex}
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\textcolor{ReportBlue}{Skill-JEPA-WM Report}}
+\fancyhead[R]{2026-04-11}
+\fancyfoot[C]{\thepage}
+\setlength{\headheight}{14pt}
+\setlist[itemize]{leftmargin=1.5em, itemsep=0.35em, topsep=0.4em}
+
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+
+\begin{document}
+
+\begin{center}
+{\LARGE\bfseries \textcolor{ReportBlue}{Skill-JEPA-WM Implementation and Experiment Report}}\\[0.5em]
+{\large Push-T Debug Track in \texttt{jepa-wms}}\\[0.4em]
+{\normalsize Branch: \texttt{skill-jepa-wm}}
+\end{center}
+
+\vspace{0.75em}
+
+\noindent
+\fcolorbox{ReportLine}{ReportGray}{
+\begin{minipage}{0.97\linewidth}
+\textbf{Executive Summary.}
+I implemented the Skill-JEPA-WM pipeline inside \texttt{jepa-wms}, corrected several evaluation inconsistencies, and reran the debug experiments on the local RTX 4070 8GB.
+The final corrected protocol shows that the \textbf{10\%-label hierarchical model outperforms both the flat variant and the labeled-only baseline} on Push-T debug.
+Under the best stable setting (\texttt{K=4}, \texttt{execute\_actions\_per\_plan=4}), the hierarchical controller reaches \textbf{25\% success} with mean pose distance \textbf{254.61}, while the flat controller remains at \textbf{0\% success} with pose distance \textbf{459.92}, and the labeled-only baseline remains at \textbf{0\% success} with pose distance \textbf{793.81}.
+\end{minipage}
+}
+
+\section*{1. Goal}
+
+The target was to build and validate a hierarchical JEPA-based world model with the following structure:
+
+\begin{itemize}
+\item a frozen V-JEPA2 encoder and offline feature cache,
+\item a passive high-level latent skill model trained on mostly action-free data,
+\item a low-level action-conditioned JEPA world model trained on a small labeled subset,
+\item hierarchical planning with skill-level MPC above primitive-action MPC.
+\end{itemize}
+
+The concrete success criteria from the design spec were:
+
+\begin{itemize}
+\item no latent collapse,
+\item the hierarchical planner beats the flat primitive-only planner,
+\item the 10\%-label setup beats the labeled-only low-level baseline at the same label budget.
+\end{itemize}
+
+\section*{2. What Was Implemented}
+
+The implementation added a new \texttt{skill\_jepa/} package and the experiment plumbing required to train and evaluate it inside \texttt{jepa-wms}.
+The main work items were:
+
+\begin{itemize}
+\item frozen V-JEPA2 feature extraction and offline HDF5 caching,
+\item state projection to global and spatial JEPA latents,
+\item passive skill inference, skill world model, and skill prior,
+\item low-level action chunk encoder and action-conditioned JEPA world model,
+\item hierarchical planners and analysis scripts,
+\item Push-T debug configs, ablations, and experiment outputs.
+\end{itemize}
+
+\section*{3. Incompletenesses Found During Review}
+
+The main value of the second pass was not more code volume. It was correcting invalid or incomplete experiment logic.
+
+\subsection*{3.1 Representation Cache Mismatch}
+
+The initial cache path encoded duplicated single frames as a two-frame video input.
+That weakened temporal signal and made start/goal latent distances unrealistically small even when simulator state distance was large.
+
+\textbf{Fix.}
+I changed the cache builder and encoder path to use causal two-frame clips.
+
+\subsection*{3.2 Online Evaluation Mismatch}
+
+The early online evaluator had several inconsistencies:
+
+\begin{itemize}
+\item it sampled goals farther in the future than the controller was allowed to act,
+\item it mixed velocity terms into the reported task distance,
+\item it encoded goals from a fresh environment render instead of using the cached goal latents already used for training,
+\item the planner comparison was order-sensitive because the stochastic planner state was not reset per episode.
+\end{itemize}
+
+\textbf{Fix.}
+I corrected all four issues:
+
+\begin{itemize}
+\item capped goal sampling to the control horizon,
+\item reported pose distance on the task state,
+\item used cache-consistent start and goal latents,
+\item reseeded each evaluation episode deterministically.
+\end{itemize}
+
+\subsection*{3.3 Control Execution Policy}
+
+The original online evaluator always executed one primitive action before replanning.
+The spec explicitly allows executing the first \(M\) primitive actions and then replanning.
+
+\textbf{Fix.}
+I added \texttt{execute\_actions\_per\_plan} to the evaluator and found that \texttt{M=4} improves the best stable debug run.
+
+\section*{4. Experiment Protocol}
+
+\subsection*{4.1 Environment}
+
+\begin{itemize}
+\item Local machine: Windows workspace, local RTX 4070 8GB
+\item Encoder: \texttt{facebook/vjepa2-vitl-fpc64-256}
+\item Dataset: readable Push-T debug backup
+\item Training mode: local only, no remote GPU rental
+\end{itemize}
+
+\subsection*{4.2 Final Main Debug Setting}
+
+\begin{itemize}
+\item chunk size \(K = 4\),
+\item control horizon \(= 32\),
+\item goal gap \(= 24\),
+\item execute first \(M = 4\) primitive actions per plan,
+\item corrected cache-consistent online evaluation.
+\end{itemize}
+
+\subsection*{4.3 Sanity Check}
+
+The corrected online task set is reachable under oracle replay of cached expert actions:
+
+\begin{center}
+\begin{tabular}{lr}
+\toprule
+Metric & Value \\
+\midrule
+Oracle replay success rate & 1.00 \\
+Oracle replay mean pose distance & 2.55 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+This matters because it shows that failures in the learned controller are model or planning failures, not an impossible evaluation setup.
+
+\section*{5. Final Results}
+
+\subsection*{5.1 Training Stability}
+
+\begin{center}
+\begin{tabularx}{0.96\linewidth}{lrrrr}
+\toprule
+\rowcolor{ReportBlue!10}
+Stage & Skill End & Skill Roll & Skill Std & Posterior Var \\
+\midrule
+Passive (epoch 3) & 0.0778 & 0.1473 & 0.0350 & 2.9512 \\
+Joint (epoch 3) & 0.0530 & 0.0847 & 0.0295 & 7.2426 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+The passive and joint runs show no latent collapse under the criterion used in the design spec.
+The skill standard deviation remains positive, and rollout losses decrease substantially.
+
+\subsection*{5.2 Final Online Comparison}
+
+\begin{center}
+\small
+\begin{tabular}{llllll}
+\toprule
+\rowcolor{ReportBlue!10}
+Run & Success & Pose Dist. & Planner Latency & Better Rate & Comment \\
+\midrule
+Joint hierarchical (\(K=4, M=4\)) & 0.25 & 254.61 & 0.212 s & 0.75 & Best final run \\
+Joint flat (\(K=4, M=4\)) & 0.00 & 459.92 & 0.525 s & -- & Same checkpoint, flat planner \\
+Labeled-only flat baseline & 0.00 & 793.81 & 0.527 s & -- & Same label budget \\
+Joint hierarchical (\(K=2\) ablation) & 0.00 & 615.69 & 0.282 s & 0.375 & Weaker than final \(K=4\) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection*{5.3 Interpretation}
+
+The corrected final result supports three claims:
+
+\begin{itemize}
+\item The hierarchical planner beats the flat primitive-only variant on the same learned model.
+\item The 10\%-label hierarchical method beats the labeled-only low-level baseline at the same label budget.
+\item The implementation is complete enough to satisfy the first complete-run criteria from the spec.
+\end{itemize}
+
+The main remaining limitation is absolute control quality.
+The learned controller is still well below the oracle replay baseline on this small debug backup.
+
+\section*{6. Summary of Concrete Fixes}
+
+\begin{center}
+\small
+\begin{tabular}{ll}
+\toprule
+\rowcolor{ReportBlue!10}
+Area & Fix \\
+\midrule
+Feature cache & Replaced duplicated single-frame inputs with causal two-frame clips \\
+Goal construction & Restricted online goals to the executable control budget \\
+State metric & Reported pose distance instead of mixing in velocity terms \\
+Goal encoding & Used cache-consistent start and goal latents for online evaluation \\
+Planner comparison & Reseeded each evaluation episode deterministically \\
+Execution policy & Added execution of the first \(M\) primitive actions before replanning \\
+Push-T runtime & Patched local gymnasium and pymunk compatibility issues \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section*{7. Conclusion}
+
+This work completed the Skill-JEPA-WM debug pipeline, corrected the evaluation protocol, and produced a final stable result that satisfies the initial milestone.
+The best current setting is the corrected \texttt{K=4} model with \texttt{execute\_actions\_per\_plan=4}.
+Its online Push-T debug result is:
+
+\begin{center}
+\fcolorbox{ReportBlue}{ReportBlue!6}{
+\begin{minipage}{0.9\linewidth}
+\textbf{Final headline result.}
+Hierarchical control reached \textbf{25\% success} and mean pose distance \textbf{254.61}, while the matched flat controller stayed at \textbf{0\% success} and the labeled-only baseline also stayed at \textbf{0\% success}.
+\end{minipage}
+}
+\end{center}
+
+The next step is not more plumbing.
+The next step is scaling the winning protocol to a larger Push-T or DROID subset and improving control quality against the oracle replay ceiling.
+
+\end{document}

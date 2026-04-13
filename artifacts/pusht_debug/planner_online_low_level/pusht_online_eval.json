@@ -1,0 +1,99 @@
+{
+  "flat": {
+    "final_latent_distance": 0.009733824081195053,
+    "planning_latency_sec": 0.5269090546894404,
+    "records": [
+      {
+        "final_coverage": 0.17450593355568816,
+        "final_latent_distance": 0.0030144723132252693,
+        "max_coverage": 0.17450593355568816,
+        "planning_latency_sec": 0.5542402999963087,
+        "skill_consistency": 0.0,
+        "start_latent_distance": 0.00562776904553175,
+        "state_dist": 331.81756591796875,
+        "steps_taken": 32,
+        "success": false
+      },
+      {
+        "final_coverage": 0.17450593355568816,
+        "final_latent_distance": 0.010769973509013653,
+        "max_coverage": 0.17450593355568816,
+        "planning_latency_sec": 0.5216092375048902,
+        "skill_consistency": 0.0,
+        "start_latent_distance": 0.002925004344433546,
+        "state_dist": 724.2033081054688,
+        "steps_taken": 32,
+        "success": false
+      },
+      {
+        "final_coverage": 0.17450593355568816,
+        "final_latent_distance": 0.014617185108363628,
+        "max_coverage": 0.17450593355568816,
+        "planning_latency_sec": 0.5226515625035972,
+        "skill_consistency": 0.0,
+        "start_latent_distance": 0.004484407603740692,
+        "state_dist": 915.8585205078125,
+        "steps_taken": 32,
+        "success": false
+      },
+      {
+        "final_coverage": 0.15844935936960636,
+        "final_latent_distance": 0.02264520525932312,
+        "max_coverage": 0.17450593355568816,
+        "planning_latency_sec": 0.5226447875065787,
+        "skill_consistency": 0.0,
+        "start_latent_distance": 0.016220716759562492,
+        "state_dist": 782.0108032226562,
+        "steps_taken": 32,
+        "success": false
+      },
+      {
+        "final_coverage": 0.17450593355568816,
+        "final_latent_distance": 0.00017876652418635786,
+        "max_coverage": 0.17450593355568816,
+        "planning_latency_sec": 0.5216635375036276,
+        "skill_consistency": 0.0,
+        "start_latent_distance": 0.011859335005283356,
+        "state_dist": 795.1636352539062,
+        "steps_taken": 32,
+        "success": false
+      },
+      {
+        "final_coverage": 0.17450593355568816,
+        "final_latent_distance": 0.00017876652418635786,
+        "max_coverage": 0.17450593355568816,
+        "planning_latency_sec": 0.5238753625053505,
+        "skill_consistency": 0.0,
+        "start_latent_distance": 0.01407458633184433,
+        "state_dist": 1037.633544921875,
+        "steps_taken": 32,
+        "success": false
+      },
+      {
+        "final_coverage": 0.17450593355568816,
+        "final_latent_distance": 0.014422043226659298,
+        "max_coverage": 0.17450593355568816,
+        "planning_latency_sec": 0.5240546624954732,
+        "skill_consistency": 0.0,
+        "start_latent_distance": 0.015558923594653606,
+        "state_dist": 788.5211181640625,
+        "steps_taken": 32,
+        "success": false
+      },
+      {
+        "final_coverage": 0.17450593355568816,
+        "final_latent_distance": 0.012044180184602737,
+        "max_coverage": 0.17450593355568816,
+        "planning_latency_sec": 0.5245329874996969,
+        "skill_consistency": 0.0,
+        "start_latent_distance": 0.0013789432123303413,
+        "state_dist": 975.24169921875,
+        "steps_taken": 32,
+        "success": false
+      }
+    ],
+    "skill_consistency": 0.0,
+    "state_dist": 793.8062744140625,
+    "success_rate": 0.0
+  }
+}
