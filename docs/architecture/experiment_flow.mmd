@@ -1,0 +1,16 @@
+flowchart TD
+  data["Local Push-T HDF5"] --> cache["Build V-JEPA2 latent cache"]
+  cache --> passive["Train passive skill model"]
+  cache --> low["Train low-level action WM"]
+  passive --> joint["Joint finetune"]
+  low --> joint
+  joint --> eval["Forced online eval"]
+  eval --> flat["Flat planner"]
+  eval --> hier["Hierarchical planner"]
+  eval --> random["Random-skill hierarchy ablation"]
+  flat --> metrics["Coverage-first metrics"]
+  hier --> metrics
+  random --> metrics
+  metrics --> plots["Plots and rollout montage"]
+  plots --> report["Reliability report"]
+  report --> release["Clean GitHub release"]

@@ -1,0 +1,91 @@
+{
+  "allow_replacement": false,
+  "cache_path": "../jepa-wms/outputs/skill_jepa/pusht_debug/cache/pusht_vjepa2_cache.h5",
+  "checkpoint": "../jepa-wms/outputs/skill_jepa/pusht_debug/joint/joint_best.pt",
+  "code_commit": "1f5e1b5529d142124ccc1689a0605000d5f6df10",
+  "coverage_threshold": 0.95,
+  "eval_split": "test",
+  "execute_actions_per_plan": 4,
+  "flat": {
+    "coverage_success_rate": 0.0,
+    "final_latent_distance": 0.01786930114030838,
+    "goal_state_success_rate": 0.0,
+    "planning_latency_sec": 0.6057743124838453,
+    "records": [
+      {
+        "coverage_success": false,
+        "episode_id": 0,
+        "episode_idx": 0,
+        "final_coverage": 0.17450593355568816,
+        "final_latent_distance": 0.01786930114030838,
+        "goal_index": 78,
+        "goal_state_success": false,
+        "max_coverage": 0.17450593355568816,
+        "planning_latency_sec": 0.6057743124838453,
+        "sampled_goal_gap": 26,
+        "skill_consistency": 0.0,
+        "start_index": 52,
+        "start_latent_distance": 0.00562776904553175,
+        "state_dist": 321.1493225097656,
+        "steps_taken": 32,
+        "success": false,
+        "video_path": "artifacts/phase_a_current_checkpoint/evals/videos/flat/episode_000.gif"
+      }
+    ],
+    "skill_consistency": 0.0,
+    "state_dist": 321.1493225097656,
+    "success_rate": 0.0,
+    "unique_episode_count": 1
+  },
+  "goal_gap": 24,
+  "hashes": {
+    "cache_sha256": "d40b9af57565fcb10b7300caf8d7aa71f6809ac9d496582bd793af0d27e73f41",
+    "checkpoint_sha256": "7635349101c6277e313538db1b5571c3d74a0dc3f3bbe6e8e9399d3226aef5c9",
+    "config_sha256": "7e4551f4bd3913146df4fb321aa0636034b6197658d2af3d8ae5e53426d96dbb",
+    "projector_sha256": "17d862f4004eff642d86fbd65de158cd219b31a89b5c3a6cbe327c575b541a27"
+  },
+  "hierarchical": {
+    "coverage_success_rate": 0.0,
+    "final_latent_distance": 0.01786930114030838,
+    "goal_state_success_rate": 0.0,
+    "planning_latency_sec": 0.25361357496876735,
+    "records": [
+      {
+        "coverage_success": false,
+        "episode_id": 0,
+        "episode_idx": 0,
+        "final_coverage": 0.17450593355568816,
+        "final_latent_distance": 0.01786930114030838,
+        "goal_index": 78,
+        "goal_state_success": false,
+        "max_coverage": 0.17450593355568816,
+        "planning_latency_sec": 0.25361357496876735,
+        "sampled_goal_gap": 26,
+        "skill_consistency": 0.18830398935824633,
+        "start_index": 52,
+        "start_latent_distance": 0.00562776904553175,
+        "state_dist": 464.55804443359375,
+        "steps_taken": 32,
+        "success": false,
+        "video_path": "artifacts/phase_a_current_checkpoint/evals/videos/hierarchical/episode_000.gif"
+      }
+    ],
+    "skill_consistency": 0.18830398935824633,
+    "state_dist": 464.55804443359375,
+    "success_rate": 0.0,
+    "unique_episode_count": 1
+  },
+  "hierarchical_better_rate": 0.0,
+  "max_episode_steps": 32,
+  "mode": "both",
+  "num_eval_episodes": 1,
+  "portable_paths": {
+    "cache_path": "../jepa-wms/outputs/skill_jepa/pusht_debug/cache/pusht_vjepa2_cache.h5",
+    "checkpoint": "../jepa-wms/outputs/skill_jepa/pusht_debug/joint/joint_best.pt",
+    "config": "artifacts/phase_a_current_checkpoint/evals/phase_a_external_debug.yaml",
+    "projector": "../jepa-wms/outputs/skill_jepa/pusht_debug/cache/state_projector.pt"
+  },
+  "requested_num_eval_episodes": 100,
+  "subgoal_scope": "train",
+  "unique_episode_count": 1
+}

@@ -21,14 +21,16 @@ from torchvision import transforms
 import src.datasets.utils.video.functional as FF
 from src.datasets.utils.video.randaugment import rand_augment_transform
 
-_pil_interpolation_to_str = {
-    Image.NEAREST: "PIL.Image.NEAREST",
-    Image.BILINEAR: "PIL.Image.BILINEAR",
-    Image.BICUBIC: "PIL.Image.BICUBIC",
-    Image.LANCZOS: "PIL.Image.LANCZOS",
-    Image.HAMMING: "PIL.Image.HAMMING",
-    Image.BOX: "PIL.Image.BOX",
-}
+_pil_interpolation_to_str = dict(
+    [
+        (Image.NEAREST, "PIL.Image.NEAREST"),
+        (Image.BILINEAR, "PIL.Image.BILINEAR"),
+        (Image.BICUBIC, "PIL.Image.BICUBIC"),
+        (Image.LANCZOS, "PIL.Image.LANCZOS"),
+        (Image.HAMMING, "PIL.Image.HAMMING"),
+        (Image.BOX, "PIL.Image.BOX"),
+    ]
+)
 
 
 _RANDOM_INTERPOLATION = (Image.BILINEAR, Image.BICUBIC)

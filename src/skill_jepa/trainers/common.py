@@ -100,11 +100,26 @@ def save_checkpoint(
     torch.save(payload, path)
 
 
-def load_checkpoint(path: str | Path, modules: Dict[str, nn.Module], optimizer: torch.optim.Optimizer | None = None) -> Dict:
+def load_checkpoint(
+    path: str | Path,
+    modules: Dict[str, nn.Module],
+    optimizer: torch.optim.Optimizer | None = None,
+    strict_modules: bool = False,
+) -> Dict:
     payload = torch.load(path, map_location="cpu")
+    checkpoint_modules = payload.get("modules", {})
+    if strict_modules:
+        missing_modules = sorted(set(modules) - set(checkpoint_modules))
+        if missing_modules:
+            raise RuntimeError(f"Checkpoint is missing required modules: {missing_modules}")
     for name, module in modules.items():
-        if name in payload["modules"]:
-            module.load_state_dict(payload["modules"][name], strict=False)
+        if name in checkpoint_modules:
+            incompatible = module.load_state_dict(checkpoint_modules[name], strict=strict_modules)
+            if strict_modules and (incompatible.missing_keys or incompatible.unexpected_keys):
+                raise RuntimeError(
+                    f"Checkpoint module {name!r} does not match: "
+                    f"missing={incompatible.missing_keys}, unexpected={incompatible.unexpected_keys}"
+                )
     if optimizer is not None and "optimizer" in payload:
         optimizer.load_state_dict(payload["optimizer"])
     return payload

@@ -1,0 +1,102 @@
+from pathlib import Path
+
+import h5py
+import numpy as np
+import pytest
+import torch
+from torch import nn
+
+from skill_jepa.analysis.eval_pusht_online import (
+    NearestSubgoalResolver,
+    _coverage_success,
+    _goal_state_eval,
+    _set_eval_seed,
+)
+from skill_jepa.data import EpisodeGoalSampler
+from skill_jepa.trainers.common import load_checkpoint
+
+
+def _write_goal_cache(path: Path, ep_len: np.ndarray) -> None:
+    offsets = np.zeros_like(ep_len, dtype=np.int64)
+    if len(offsets) > 1:
+        offsets[1:] = np.cumsum(ep_len[:-1], dtype=np.int64)
+    total = int(ep_len.sum())
+    with h5py.File(path, "w") as handle:
+        handle.create_dataset("ep_len", data=ep_len.astype(np.int32))
+        handle.create_dataset("ep_offset", data=offsets)
+        handle.create_dataset("episode_idx", data=np.repeat(np.arange(len(ep_len)), ep_len))
+        handle.create_dataset("step_idx", data=np.concatenate([np.arange(length) for length in ep_len]))
+        handle.create_dataset("z", data=np.zeros((total, 4), dtype=np.float32))
+        handle.create_dataset("s", data=np.zeros((total, 2, 4), dtype=np.float32))
+        handle.create_dataset("action", data=np.zeros((total, 2), dtype=np.float32))
+        state = np.zeros((total, 5), dtype=np.float32)
+        state[:, 0] = np.arange(total, dtype=np.float32)
+        handle.create_dataset("state", data=state)
+
+
+def test_goal_sampler_replacement_is_explicit(tmp_path: Path):
+    cache_path = tmp_path / "cache.h5"
+    _write_goal_cache(cache_path, np.array([6, 6, 6], dtype=np.int32))
+    sampler = EpisodeGoalSampler(cache_path, split="train", val_fraction=0.0, test_fraction=0.0, seed=0, goal_gap=1)
+
+    without_replacement = sampler.sample(10, seed=0, allow_replacement=False)
+    with_replacement = sampler.sample(10, seed=0, allow_replacement=True)
+
+    assert len(without_replacement) == 3
+    assert len({int(pair["episode_id"]) for pair in without_replacement}) == 3
+    assert len(with_replacement) == 10
+    assert len({int(pair["episode_id"]) for pair in with_replacement}) <= 3
+
+
+def test_success_metrics_keep_coverage_primary():
+    assert _coverage_success({"max_coverage": 0.95}, threshold=0.95)
+    assert not _coverage_success({"max_coverage": 0.949}, threshold=0.95)
+
+    goal = np.array([100.0, 100.0, 200.0, 200.0, 0.0], dtype=np.float32)
+    current = np.array([105.0, 101.0, 202.0, 199.0, 0.01], dtype=np.float32)
+    metrics = _goal_state_eval(goal, current)
+    assert metrics["goal_state_success"]
+    assert metrics["state_dist"] > 0.0
+
+
+def test_set_eval_seed_calls_environment_seed():
+    class FakeEnv:
+        def __init__(self):
+            self.seeds = []
+
+        def seed(self, seed):
+            self.seeds.append(seed)
+
+    env = FakeEnv()
+    _set_eval_seed(123, env=env)
+    assert env.seeds == [123]
+
+
+def test_strict_checkpoint_loading_rejects_missing_modules(tmp_path: Path):
+    checkpoint = tmp_path / "checkpoint.pt"
+    torch.save({"modules": {"present": nn.Linear(1, 1).state_dict()}}, checkpoint)
+    modules = {"present": nn.Linear(1, 1), "missing": nn.Linear(1, 1)}
+
+    with pytest.raises(RuntimeError, match="missing required modules"):
+        load_checkpoint(checkpoint, modules, strict_modules=True)
+
+
+def test_subgoal_resolver_respects_allowed_indices(tmp_path: Path):
+    cache_path = tmp_path / "cache.h5"
+    with h5py.File(cache_path, "w") as handle:
+        handle.create_dataset("z", data=np.array([[10.0, 0.0], [0.0, 0.0]], dtype=np.float32))
+        handle.create_dataset(
+            "s",
+            data=np.array(
+                [
+                    [[1.0, 1.0]],
+                    [[9.0, 9.0]],
+                ],
+                dtype=np.float32,
+            ),
+        )
+
+    resolver = NearestSubgoalResolver(str(cache_path), torch.device("cpu"), allowed_indices=np.array([0]))
+    subgoal_s = resolver(torch.tensor([0.0, 0.0]))
+
+    assert torch.allclose(subgoal_s, torch.tensor([[1.0, 1.0]]))

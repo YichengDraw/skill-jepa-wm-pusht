@@ -132,32 +132,34 @@ def ensure_scaled_cache() -> Path:
     return cache_path
 
 
-def run_debug_reeval() -> Path:
+def run_debug_reeval(force: bool = False) -> Path:
     out_dir = EVAL_ROOT / "current_best_checkpoint_100ep"
     summary_path = out_dir / "pusht_online_eval.json"
-    if summary_path.exists():
+    if summary_path.exists() and not force:
         return summary_path
-    _run_logged(
-        [
-            str(PYTHON),
-            "-m",
-            "skill_jepa.analysis.eval_pusht_online",
-            "--config",
-            _path_str(DEBUG_CONFIG),
-            "--checkpoint",
-            _path_str(DEBUG_CHECKPOINT),
-            "--output",
-            _path_str(out_dir),
-            "--mode",
-            "both",
-            "--num-eval-episodes",
-            "100",
-            "--save-videos",
-            "--video-limit",
-            "4",
-        ],
-        LOG_ROOT / "current_best_checkpoint_100ep.log",
-    )
+    command = [
+        str(PYTHON),
+        "-m",
+        "skill_jepa.analysis.eval_pusht_online",
+        "--config",
+        _path_str(DEBUG_CONFIG),
+        "--checkpoint",
+        _path_str(DEBUG_CHECKPOINT),
+        "--output",
+        _path_str(out_dir),
+        "--mode",
+        "both",
+        "--num-eval-episodes",
+        "100",
+        "--save-videos",
+        "--video-limit",
+        "4",
+        "--subgoal-scope",
+        "train",
+    ]
+    if force:
+        command.append("--force")
+    _run_logged(command, LOG_ROOT / "current_best_checkpoint_100ep.log")
     return summary_path
 
 
@@ -254,6 +256,8 @@ def evaluate_seed(seed: int, artifacts: dict[str, Path]) -> tuple[list[dict], li
                     str(goal_gap),
                     "--num-eval-episodes",
                     str(num_eval),
+                    "--subgoal-scope",
+                    "train",
                 ]
                 if save_videos:
                     command.extend(["--save-videos", "--video-limit", "2"])
@@ -266,9 +270,11 @@ def evaluate_seed(seed: int, artifacts: dict[str, Path]) -> tuple[list[dict], li
                     "seed": seed,
                     "config_name": config_name,
                     "goal_gap": goal_gap,
-                    "num_eval_episodes": num_eval,
+                    "num_eval_episodes": summary.get("num_eval_episodes", num_eval),
                     "mode": mode,
-                    "success_rate": method_summary["success_rate"],
+                    "success_rate": method_summary.get("coverage_success_rate", method_summary["success_rate"]),
+                    "coverage_success_rate": method_summary.get("coverage_success_rate", method_summary["success_rate"]),
+                    "goal_state_success_rate": method_summary.get("goal_state_success_rate", method_summary["success_rate"]),
                     "state_dist": method_summary["state_dist"],
                     "final_latent_distance": method_summary["final_latent_distance"],
                     "planning_latency_sec": method_summary["planning_latency_sec"],
@@ -299,7 +305,15 @@ def _save_current_best_csv(summary_path: Path) -> Path:
     with open(out_path, "w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(
             handle,
-            fieldnames=["method", "success_rate", "state_dist", "final_latent_distance", "planning_latency_sec", "skill_consistency"],
+            fieldnames=[
+                "method",
+                "coverage_success_rate",
+                "goal_state_success_rate",
+                "state_dist",
+                "final_latent_distance",
+                "planning_latency_sec",
+                "skill_consistency",
+            ],
         )
         writer.writeheader()
         for method in ["hierarchical", "flat"]:
@@ -307,7 +321,8 @@ def _save_current_best_csv(summary_path: Path) -> Path:
             writer.writerow(
                 {
                     "method": method,
-                    "success_rate": payload["success_rate"],
+                    "coverage_success_rate": payload.get("coverage_success_rate", payload["success_rate"]),
+                    "goal_state_success_rate": payload.get("goal_state_success_rate", payload["success_rate"]),
                     "state_dist": payload["state_dist"],
                     "final_latent_distance": payload["final_latent_distance"],
                     "planning_latency_sec": payload["planning_latency_sec"],
@@ -546,11 +561,13 @@ def _collect_existing_results(seeds: list[int]) -> tuple[list[dict], list[dict]]
                     {
                         "seed": seed,
                         "config_name": config_name,
-                        "goal_gap": goal_gap,
-                        "num_eval_episodes": summary["num_eval_episodes"],
-                        "mode": mode,
-                        "success_rate": method_summary["success_rate"],
-                        "state_dist": method_summary["state_dist"],
+                    "goal_gap": goal_gap,
+                    "num_eval_episodes": summary["num_eval_episodes"],
+                    "mode": mode,
+                    "success_rate": method_summary.get("coverage_success_rate", method_summary["success_rate"]),
+                    "coverage_success_rate": method_summary.get("coverage_success_rate", method_summary["success_rate"]),
+                    "goal_state_success_rate": method_summary.get("goal_state_success_rate", method_summary["success_rate"]),
+                    "state_dist": method_summary["state_dist"],
                         "final_latent_distance": method_summary["final_latent_distance"],
                         "planning_latency_sec": method_summary["planning_latency_sec"],
                         "skill_consistency": method_summary["skill_consistency"],
@@ -576,6 +593,7 @@ def main() -> None:
     parser.add_argument("--seeds", nargs="*", type=int, default=SEEDS)
     parser.add_argument("--skip-debug-reeval", action="store_true")
     parser.add_argument("--aggregate-only", action="store_true")
+    parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
 
     seeds = list(args.seeds)
@@ -584,7 +602,7 @@ def main() -> None:
     if not args.aggregate_only:
         ensure_scaled_cache()
         if not args.skip_debug_reeval:
-            current_best_summary = run_debug_reeval()
+            current_best_summary = run_debug_reeval(force=bool(args.force))
             _save_current_best_csv(current_best_summary)
 
         rows: list[dict] = []

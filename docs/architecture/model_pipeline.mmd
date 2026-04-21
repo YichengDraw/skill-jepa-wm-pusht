@@ -1,0 +1,18 @@
+flowchart TD
+  raw["Raw Push-T HDF5: pixels, actions, states"] --> clips["Causal 2-frame clips"]
+  clips --> encoder["Frozen V-JEPA2 encoder"]
+  encoder --> projector["StateProjector"]
+  projector --> z["z_t global latent"]
+  projector --> s["s_t spatial tokens"]
+  z --> skill["SkillIDM, SkillPrior, SkillWorldModel"]
+  s --> lowwm["LowLevelWM"]
+  raw --> actions["Primitive action chunks"]
+  actions --> actionenc["ActionChunkEncoder"]
+  skill --> highcem["HighLevelCEM: skill sequence to subgoal z"]
+  highcem --> resolver["Train-split nearest cached s"]
+  resolver --> lowcem["LowLevelCEM: action sequence"]
+  lowwm --> lowcem
+  actionenc --> lowcem
+  lowcem --> env["Execute first actions in PushTEnv"]
+  env --> live["Live visual observation"]
+  live --> clips

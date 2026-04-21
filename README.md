@@ -1,6 +1,6 @@
 # Skill-JEPA-WM Push-T
 
-Skill-JEPA-WM is a hierarchical world-model experiment built on top of `facebookresearch/jepa-wms`. This repository packages the Push-T branch of the work: frozen V-JEPA2 feature caching, passive latent skill learning, low-level action grounding, hierarchical planning, locked online evaluation, and the reports produced during the debugging phase.
+Skill-JEPA-WM is a hierarchical world-model experiment built on top of `facebookresearch/jepa-wms`. This repository packages the Push-T branch of the work: frozen V-JEPA2 feature caching, passive latent skill learning, low-level action grounding, hierarchical planning, coverage-first online evaluation, and reliability artifacts for the debugging snapshot.
 
 ## Highlights
 
@@ -8,10 +8,20 @@ Skill-JEPA-WM is a hierarchical world-model experiment built on top of `facebook
 - Continuous latent skill model trained from mostly action-free chunks
 - Low-level action-conditioned JEPA world model trained on the labeled subset
 - Hierarchical planner, flat planner, and random-skill hierarchical baseline
-- Cache-consistent Push-T online evaluation with deterministic per-episode reseeding
-- Included debug and locked-progress reports, evaluation CSVs, JSON summaries, and rollout GIFs
+- Coverage-first Push-T online evaluation with deterministic NumPy/Torch/CUDA/env reseeding
+- Strict checkpoint loading and train-split-only subgoal lookup for hierarchical eval
+- Rendered model-pipeline and experiment-flow diagrams under `docs/architecture/`
+- Reliability report, re-scored legacy artifacts, evaluation CSVs, JSON summaries, and rollout GIFs
 
 ## Visual Summary
+
+Model pipeline:
+
+![Skill-JEPA-WM model pipeline](docs/architecture/model_pipeline.svg)
+
+Experiment flow:
+
+![Skill-JEPA-WM experiment flow](docs/architecture/experiment_flow.svg)
 
 Hierarchical rollout:
 
@@ -27,7 +37,7 @@ This is a focused experimental snapshot, not a full mirror of the upstream JEPA-
 
 ## Installation
 
-Python `3.10` is the target version.
+Python `3.10` or `3.11` is the target version.
 
 ```bash
 git clone https://github.com/YichengDraw/skill-jepa-wm-pusht.git
@@ -113,23 +123,18 @@ python -m tools.run_skill_jepa_pusht_locked_suite
 
 ## Architecture Notes
 
-```mermaid
-flowchart LR
-    A["Push-T frames"] --> B["Frozen V-JEPA2 encoder"]
-    B --> C["State projector"]
-    C --> D["Global state z_t"]
-    C --> E["Spatial tokens s_t"]
-    D --> F["Passive skill IDM / skill prior / skill WM"]
-    E --> G["Low-level action JEPA-WM"]
-    F --> H["High-level planner"]
-    G --> I["Low-level CEM planner"]
-    H --> I
-    I --> J["Push-T online control"]
-```
+The rendered architecture sources are:
+
+- `docs/architecture/model_pipeline.mmd`
+- `docs/architecture/model_pipeline.svg`
+- `docs/architecture/experiment_flow.mmd`
+- `docs/architecture/experiment_flow.svg`
+
+The key runtime path is: raw Push-T HDF5 frames/actions/states -> causal two-frame V-JEPA2 cache -> `z_t` global latent and `s_t` spatial tokens -> skill-level and low-level world models -> CEM planning -> PushTEnv online control with live visual re-encoding.
 
 ## Reported Results
 
-### Debug status
+### Historical debug status
 
 From `artifacts/pusht_debug/EXPERIMENT_STATUS.md`:
 
@@ -138,31 +143,48 @@ From `artifacts/pusht_debug/EXPERIMENT_STATUS.md`:
 - Debug flat success: `0.00`
 - Debug labeled-only flat baseline success: `0.00`
 
-### Locked 100-episode reevaluation
+These debug numbers are historical goal-state-reaching diagnostics. They are not standard Push-T coverage-success evidence.
 
-From `artifacts/pusht_locked_suite/reports/current_best_checkpoint_comparison.csv`:
+### Coverage-first reliability re-score
 
-| Method | Success | Mean pose distance | Mean planning latency |
-|---|---:|---:|---:|
-| Hierarchical | 0.07 | 264.43 | 0.249 s |
-| Flat | 0.07 | 355.30 | 0.564 s |
+From `artifacts/release/skill_jepa_wm_reliability_report.md`:
+
+| Method | Coverage success | Goal-state success | Unique episodes | Mean pose distance | Mean planning latency |
+|---|---:|---:|---:|---:|---:|
+| Hierarchical | 0.00 | 0.07 | 1 | 264.43 | 0.249 s |
+| Flat | 0.00 | 0.07 | 1 | 355.30 | 0.564 s |
 
 Interpretation:
 
-- Hierarchy keeps a clear pose-distance advantage.
-- Hierarchy keeps a large planning-latency advantage.
-- The 100-episode locked reevaluation does not show a success-rate advantage over flat.
+- The old `success_rate` column measured pose-to-sampled-goal success, not standard Push-T coverage success.
+- The legacy locked artifact has repeated sampled pairs from one unique episode.
+- Hierarchy improves pose distance and planning latency in that artifact.
+- The artifact does not support a standard Push-T task-success claim.
+
+### Phase A fresh current-checkpoint eval
+
+The corrected evaluator was rerun against the available sibling debug cache/checkpoint with replacement disabled, train-split subgoal lookup, strict checkpoint loading, env seeding, portable paths, and artifact hashes. The debug cache yields one unique test episode, so this is a reliability smoke rerun rather than a scaled method verdict.
+
+| Method | Coverage success | Goal-state success | Mean pose distance | Mean planning latency |
+|---|---:|---:|---:|---:|
+| Hierarchical | 0.00 | 0.00 | 464.56 | 0.254 s |
+| Flat | 0.00 | 0.00 | 321.15 | 0.606 s |
 
 ## Tracked Artifacts
 
 - `artifacts/pusht_debug/skill_jepa_wm_report.pdf`
 - `artifacts/pusht_locked_suite/skill_jepa_wm_locked_progress_report.pdf`
+- `artifacts/release/skill_jepa_wm_reliability_report.pdf`
+- `artifacts/release/plots/`
+- `artifacts/release/sanitized_locked_artifacts/`
+- `artifacts/phase_a_current_checkpoint/evals/`
 - `artifacts/pusht_locked_suite/evals/current_best_checkpoint_100ep/pusht_online_eval.json`
 - `artifacts/pusht_locked_suite/evals/current_best_checkpoint_100ep/pusht_online_records.csv`
 
 ## Limitations
 
-- Checkpoints and cached latents are not committed because they are too large for a normal GitHub repository.
+- Checkpoints, raw HDF5 files, and cached latents are not committed because they are too large for a normal GitHub repository.
+- The tracked legacy locked artifact is useful for regression and reporting hygiene, but it is not a full held-out Push-T task-success evaluation.
 - The 3-seed scaled locked suite is not complete in the tracked artifacts.
 - The feasibility critic is intentionally absent because the hierarchy line has not yet cleared the locked scaling gate.
 

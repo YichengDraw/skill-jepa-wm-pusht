@@ -18,7 +18,8 @@ venv/
 Thumbs.db
 
 # Data and checkpoints
-data/
+/data/
+evals/simu_env_planning/envs/wall_env/data/
 outputs/
 *.pt
 *.pth
@@ -33,6 +34,10 @@ outputs/
 *.out
 *.synctex.gz
 *.toc
+*.egg-info/
+.wheeltest*/
+build/
+dist/
 
 # Keep tracked artifacts
 !artifacts/

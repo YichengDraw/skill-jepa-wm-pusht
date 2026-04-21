@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "skill-jepa-wm-pusht"
 version = "0.1.0"
 readme = "README.md"
-requires-python = ">=3.10,<3.11"
+requires-python = ">=3.10,<3.12"
 authors = [
     {name = "Yicheng Zhao"}
 ]
@@ -99,8 +99,8 @@ Homepage = "https://github.com/YichengDraw/skill-jepa-wm-pusht"
 Repository = "https://github.com/YichengDraw/skill-jepa-wm-pusht"
 
 [tool.setuptools.packages.find]
-where = ["."]
-include = ["src*", "app*", "evals*", "skill_jepa*"]
+where = ["src", "."]
+include = ["skill_jepa*", "evals*"]
 
 [tool.isort]
 profile = "black"

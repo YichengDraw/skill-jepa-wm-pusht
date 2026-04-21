@@ -1,0 +1,22 @@
+{
+  "coverage_threshold": 0.95,
+  "methods": {
+    "flat": {
+      "coverage_success_rate": 0.0,
+      "goal_state_success_rate": 0.07,
+      "n": 100.0,
+      "planning_latency_sec": 0.5641013694595243,
+      "state_dist": 355.2981102848053,
+      "unique_episodes": 1.0
+    },
+    "hierarchical": {
+      "coverage_success_rate": 0.0,
+      "goal_state_success_rate": 0.07,
+      "n": 100.0,
+      "planning_latency_sec": 0.2493375534135474,
+      "state_dist": 264.4328410577774,
+      "unique_episodes": 1.0
+    }
+  },
+  "source": "legacy locked artifact re-scored with coverage-first semantics"
+}

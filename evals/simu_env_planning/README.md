@@ -61,48 +61,7 @@ The `random_actions` variant steps Gaussian-sampled actions from the initial sta
 
 Enable with `cfg.logging.optional_plots`. Generated via `evals/simu_env_planning/planning/episode_plot_utils.py`.
 
-### Basic Plots
-
-| State | Expert video | Agent success video |
-|-------|--------------|---------------------|
-| <img src="assets/rcasa_state.png" width="320" /> | <img src="assets/expert_video.gif" width="180" /> | <img src="assets/video_agent_goal_succ.gif" width="180" /> |
-
-- `state.pdf`: Initial and goal images $(s_0, s_g)$
-- `video_agent_goal_{success}.gif`: Episode GIF after stepping planned actions
-- `expert_video.gif`: Expert trajectory GIF (if `goal_source ∈ [dset, expert]`)
-
-### Analysis Plots
-
-| Planning costs | Actions comparison |
-|----------------|-------------------|
-| <img src="assets/rcasa_losses.png" width="450" /> | <img src="assets/droid_action_comp.png" width="400" /> |
-
-- `losses.pdf`: Planning cost $C$ throughout optimizer iterations per timestep
-- `action_comparison.pdf`: Agent vs expert action values per dimension
-
-| | Expert | Agent |
-|---|--------|-------|
-| Cartesian Distance | <img src="assets/rcasa_expert_distances.png" width="300" /> | <img src="assets/rcasa_agent_distances.png" width="300" /> |
-| Representation Distance | <img src="assets/rcasa_expert_repdist_vis.png" width="300" /> | <img src="assets/rcasa_agent_repdist_vis.png" width="300" /> |
-
-### Decoding Plots (if `cfg.planner.decode_each_iteration`)
-
-<table>
-<tr>
-<th>step0.gif</th>
-<th>step0_last_frames</th>
-<th>step0_gt</th>
-</tr>
-<tr>
-<td><img src="assets/step0.gif" width="200" /></td>
-<td><img src="assets/rcasa_step0_lastframes.png" width="250" /></td>
-<td><img src="assets/rcasa_step0_gt.png" width="250" /></td>
-</tr>
-<tr>
-<td></td>
-<td colspan="2">Stepping of only the first action out of the H=3 actions planned, both in the env and in the world model's "imagination".</td>
-</tr>
-</table>
+The original upstream image examples are not tracked in this focused Push-T release. Generate fresh plot assets from a local run when working with RoboCasa, DROID, or decoding-heavy evals.
 
 ## Architecture
 
