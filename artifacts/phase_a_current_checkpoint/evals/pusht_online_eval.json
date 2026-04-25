@@ -4,10 +4,10 @@
   "allow_under_sampling": true,
   "cache_path": "external/phase_a_debug_cache.h5",
   "checkpoint": "external/phase_a_debug_joint_best.pt",
-  "code_commit": "52b847052077c5097c985b6f6afa2de841774249",
+  "code_commit": "2ba22a2e67796e4a10f770bcea2b850bebb60463",
   "code_commit_semantics": "code_commit records the evaluator source commit at run time; the artifact commit is necessarily later",
   "code_dirty": false,
-  "code_status_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "code_status_sha256": "ad16db587d693b3d8aa9365896a0cdd57e10b89a2b50bd3591f3282d50d6bd71",
   "coverage_threshold": 0.95,
   "deterministic_timing": false,
   "eval_seed": 7,
@@ -20,7 +20,7 @@
     "goal_state_success_diagnostic_rate": 0.0,
     "goal_state_success_is_task_metric": false,
     "goal_state_success_scope": "trajectory_full_state_diagnostic",
-    "planning_latency_sec": 0.5613430999947013,
+    "planning_latency_sec": 0.7939918625052087,
     "records": [
       {
         "coverage_success": false,
@@ -34,7 +34,7 @@
         "goal_mode": "trajectory",
         "goal_state_success": false,
         "max_coverage": 0.17450593355568816,
-        "planning_latency_sec": 0.5613430999947013,
+        "planning_latency_sec": 0.7939918625052087,
         "sampled_goal_gap": 26,
         "skill_consistency": 0.0,
         "start_index": 52,
@@ -62,7 +62,7 @@
     "goal_state_success_diagnostic_rate": 0.0,
     "goal_state_success_is_task_metric": false,
     "goal_state_success_scope": "trajectory_full_state_diagnostic",
-    "planning_latency_sec": 0.22706574999028817,
+    "planning_latency_sec": 0.35156469998764805,
     "records": [
       {
         "coverage_success": false,
@@ -76,7 +76,7 @@
         "goal_mode": "trajectory",
         "goal_state_success": false,
         "max_coverage": 0.17450593355568816,
-        "planning_latency_sec": 0.22706574999028817,
+        "planning_latency_sec": 0.35156469998764805,
         "sampled_goal_gap": 26,
         "skill_consistency": 0.18830398935824633,
         "start_index": 52,
@@ -105,7 +105,9 @@
   "provenance": {
     "cache_projector_hash_checked": false,
     "cache_source_hash_recorded": false,
+    "checkpoint_code_provenance_checked": false,
     "warnings": [
+      "Checkpoint does not record code provenance; code compatibility is partially unavailable",
       "Checkpoint does not record data.cache_path hash; path/file identity checks were used",
       "Checkpoint does not record data.projector_ckpt hash; path/file identity checks were used",
       "Cache does not record encoder_model_id; encoder/cache compatibility is partially unavailable",
