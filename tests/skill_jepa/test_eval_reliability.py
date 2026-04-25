@@ -1,5 +1,8 @@
 import hashlib
+import ast
+import inspect
 import json
+import textwrap
 from pathlib import Path
 
 import h5py
@@ -681,6 +684,23 @@ def test_set_eval_seed_calls_environment_seed():
     env = FakeEnv()
     _set_eval_seed(123, env=env)
     assert env.seeds == [123]
+
+
+def test_online_eval_loop_reseeds_environment_at_episode_callsite():
+    tree = ast.parse(textwrap.dedent(inspect.getsource(online_eval.main)))
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_set_eval_seed"
+    ]
+
+    assert any(
+        call.args
+        and isinstance(call.args[0], ast.Name)
+        and call.args[0].id == "episode_seed"
+        and any(keyword.arg == "env" and isinstance(keyword.value, ast.Name) and keyword.value.id == "env" for keyword in call.keywords)
+        for call in calls
+    )
 
 
 def test_strict_checkpoint_loading_rejects_missing_modules(tmp_path: Path):
