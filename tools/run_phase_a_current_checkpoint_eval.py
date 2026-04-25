@@ -68,6 +68,9 @@ def main() -> None:
         "train",
         "--goal-mode",
         "trajectory",
+        "--allow-under-sampling",
+        "--min-unique-episodes",
+        "1",
     ]
     _run(
         common

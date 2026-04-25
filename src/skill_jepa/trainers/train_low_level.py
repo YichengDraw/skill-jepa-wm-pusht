@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader
 
 from skill_jepa.data import FeatureSequenceDataset
 from skill_jepa.trainers.common import (
+    assert_checkpoint_config_compatible,
     build_low_level_modules,
     build_skill_modules,
     load_checkpoint,
@@ -100,11 +101,12 @@ def main() -> None:
     modules.update(build_low_level_modules(cfg, cfg["data"]["cache_path"]))
     if cfg["training"].get("passive_checkpoint"):
         passive_names = ["skill_idm", "skill_wm", "skill_prior", "skill_proj", "effect_proj"]
-        load_checkpoint(
+        passive_payload = load_checkpoint(
             cfg["training"]["passive_checkpoint"],
             {name: modules[name] for name in passive_names},
             strict_modules=True,
         )
+        assert_checkpoint_config_compatible(passive_payload, cfg, label="Passive checkpoint")
     _freeze(modules, ["skill_idm", "skill_wm", "skill_prior", "skill_proj", "effect_proj"])
     modules_to_device(modules, device)
     optimizer = torch.optim.AdamW(

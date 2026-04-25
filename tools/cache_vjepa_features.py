@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import sys
 from pathlib import Path
 
@@ -16,6 +17,19 @@ import torch
 from skill_jepa.encoders import FrozenVJEPA2Encoder
 from skill_jepa.modules import StateProjector
 from skill_jepa.utils import ensure_dir, load_yaml, seed_everything
+
+
+def _sha256_file(path: str | Path | None) -> str | None:
+    if path is None:
+        return None
+    file_path = Path(path)
+    if not file_path.exists() or not file_path.is_file():
+        return None
+    hasher = hashlib.sha256()
+    with open(file_path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
 
 
 def _trim_episode_layout(ep_len: np.ndarray, max_steps: int | None, max_episodes: int | None):
@@ -115,7 +129,14 @@ def main() -> None:
 
         with h5py.File(cache_h5, "w") as dst:
             dst.attrs["source_h5"] = str(raw_h5)
+            dst.attrs["source_h5_sha256"] = _sha256_file(raw_h5) or ""
             dst.attrs["projector_ckpt"] = str(projector_ckpt)
+            dst.attrs["projector_ckpt_sha256"] = _sha256_file(projector_ckpt) or ""
+            dst.attrs["encoder_model_id"] = str(cfg["encoder"]["model_id"])
+            dst.attrs["encoder_state_dim"] = int(cfg["encoder"]["state_dim"])
+            dst.attrs["encoder_pool_grid"] = int(cfg["encoder"]["pool_grid"])
+            dst.attrs["max_steps"] = -1 if cfg["data"].get("max_steps") is None else int(cfg["data"]["max_steps"])
+            dst.attrs["max_episodes"] = -1 if cfg["data"].get("max_episodes") is None else int(cfg["data"]["max_episodes"])
             dst.create_dataset("ep_len", data=ep_len)
             dst.create_dataset("ep_offset", data=ep_offset)
             if "episode_idx" in src and "step_idx" in src:

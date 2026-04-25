@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Dict
 
@@ -9,6 +10,79 @@ import torch.nn as nn
 from skill_jepa.data import cache_metadata
 from skill_jepa.modules import ActionChunkEncoder, LowLevelWM, SkillIDM, SkillPrior, SkillWorldModel
 from skill_jepa.utils import ensure_dir
+
+
+def sha256_file(path: str | Path | None) -> str | None:
+    if path is None:
+        return None
+    file_path = Path(path)
+    if not file_path.exists() or not file_path.is_file():
+        return None
+    hasher = hashlib.sha256()
+    with open(file_path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def normalized_path(path: str | Path) -> str:
+    return str(Path(str(path)).expanduser().resolve(strict=False)).replace("\\", "/")
+
+
+def same_file_identity(recorded: str | Path, current: str | Path) -> bool:
+    recorded_hash = sha256_file(recorded)
+    current_hash = sha256_file(current)
+    if recorded_hash is not None and current_hash is not None:
+        return recorded_hash == current_hash
+    return normalized_path(recorded) == normalized_path(current)
+
+
+def artifact_hashes_for_config(config: Dict) -> Dict[str, str]:
+    hashes = {}
+    for section, keys in {
+        "data": ["cache_path", "projector_ckpt"],
+        "training": ["passive_checkpoint", "low_level_checkpoint"],
+    }.items():
+        for key in keys:
+            path = config.get(section, {}).get(key)
+            digest = sha256_file(path)
+            if digest is not None:
+                hashes[f"{section}.{key}"] = digest
+    return hashes
+
+
+def assert_checkpoint_config_compatible(
+    checkpoint_payload: Dict,
+    runtime_config: Dict,
+    label: str = "Checkpoint",
+    sections: tuple[str, ...] = ("encoder", "model"),
+    data_keys: tuple[str, ...] = ("cache_path", "projector_ckpt"),
+) -> None:
+    checkpoint_config = checkpoint_payload.get("config", {})
+    if not checkpoint_config:
+        raise RuntimeError(f"{label} does not record its training config")
+    for section in sections:
+        if checkpoint_config.get(section) != runtime_config.get(section):
+            raise RuntimeError(f"{label} {section} config does not match the runtime config")
+    checkpoint_data = checkpoint_config.get("data", {})
+    runtime_data = runtime_config.get("data", {})
+    checkpoint_hashes = checkpoint_payload.get("artifact_hashes", {})
+    runtime_hashes = artifact_hashes_for_config(runtime_config)
+    for key in data_keys:
+        recorded = checkpoint_data.get(key)
+        current = runtime_data.get(key)
+        if recorded is None or current is None:
+            continue
+        hash_key = f"data.{key}"
+        if hash_key in checkpoint_hashes and hash_key in runtime_hashes:
+            if checkpoint_hashes[hash_key] != runtime_hashes[hash_key]:
+                raise RuntimeError(f"{label} {key} hash does not match the runtime config")
+            continue
+        if not same_file_identity(recorded, current):
+            raise RuntimeError(
+                f"{label} {key} does not match the runtime config: "
+                f"recorded={recorded}, current={current}"
+            )
 
 
 def build_skill_modules(cfg: Dict, cache_path: str) -> Dict[str, nn.Module]:
@@ -92,6 +166,7 @@ def save_checkpoint(
     payload = {
         "step": step,
         "config": config,
+        "artifact_hashes": artifact_hashes_for_config(config),
         "metrics": metrics or {},
         "modules": {name: module.state_dict() for name, module in modules.items()},
     }
@@ -125,4 +200,15 @@ def load_checkpoint(
                 )
     if optimizer is not None and "optimizer" in payload:
         optimizer.load_state_dict(payload["optimizer"])
+    return payload
+
+
+def load_checkpoint_subset(path: str | Path, modules: Dict[str, nn.Module], required_modules: list[str]) -> Dict:
+    payload = torch.load(path, map_location="cpu")
+    checkpoint_modules = payload.get("modules", {})
+    missing_modules = sorted(set(required_modules) - set(checkpoint_modules))
+    if missing_modules:
+        raise RuntimeError(f"Checkpoint is missing required modules: {missing_modules}")
+    for name in required_modules:
+        modules[name].load_state_dict(checkpoint_modules[name], strict=True)
     return payload

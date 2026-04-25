@@ -182,6 +182,7 @@ class EpisodeGoalSampler:
         seed: int,
         max_goal_gap: int | None = None,
         allow_replacement: bool = False,
+        allow_under_sampling: bool = False,
     ) -> List[Dict[str, np.ndarray]]:
         if max_goal_gap is not None and int(max_goal_gap) < int(self.goal_gap):
             raise ValueError(f"max_goal_gap={max_goal_gap} is smaller than goal_gap={self.goal_gap}")
@@ -198,7 +199,14 @@ class EpisodeGoalSampler:
                 return result
             sample_size = int(num_pairs)
             if not allow_replacement:
-                sample_size = min(sample_size, len(valid_episode_ids))
+                if sample_size > len(valid_episode_ids):
+                    if not allow_under_sampling:
+                        raise ValueError(
+                            f"Requested {sample_size} goal pairs from {len(valid_episode_ids)} valid episodes "
+                            "without replacement. Use allow_replacement=True for repeated episodes or "
+                            "allow_under_sampling=True for explicit debug smoke runs."
+                        )
+                    sample_size = len(valid_episode_ids)
             chosen_eps = rng.choice(
                 valid_episode_ids,
                 size=sample_size,

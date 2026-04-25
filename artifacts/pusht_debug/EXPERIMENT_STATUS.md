@@ -17,23 +17,23 @@ Historical note: the success and distance values in this debug status are sample
   - support executing the first `M` primitive actions per plan.
 - Rebuilt the cache and reran passive, low-level, joint, and online planning evals.
 
-## Current Result
+## Historical Diagnostic Result
 
 - No latent collapse on the joint model:
   - `skill_end = 0.0530`
   - `skill_roll = 0.0847`
   - `skill_std = 0.0295`
 - The corrected online task sampler is valid:
-  - expert replay sampled-goal success rate: `1.0`
+  - expert replay sampled-trajectory goal-state diagnostic rate: `1.0`
   - expert replay sampled-state distance: `2.55`
-- Best current debug result is the clip-based `K=4` model with `execute_actions_per_plan = 4`:
-  - hierarchical sampled-goal success rate: `0.25`
+- Best historical sampled-trajectory diagnostic setting is the clip-based `K=4` model with `execute_actions_per_plan = 4`:
+  - hierarchical sampled-trajectory goal-state diagnostic rate: `0.25`
   - hierarchical sampled-state distance: `254.61`
-  - flat sampled-goal success rate: `0.0`
+  - flat sampled-trajectory goal-state diagnostic rate: `0.0`
   - flat sampled-state distance: `459.92`
-  - hierarchical beats flat on `75%` of eval episodes
-- The 10%-label hierarchical method beats the labeled-only low-level baseline at the same label budget:
-  - labeled-only flat baseline sampled-goal success rate: `0.0`
+  - hierarchical has lower sampled-state distance than flat on `75%` of eval episodes
+- In this historical diagnostic, the 10%-label hierarchical method has lower sampled-state distance than the labeled-only low-level baseline at the same label budget:
+  - labeled-only flat baseline sampled-trajectory goal-state diagnostic rate: `0.0`
   - labeled-only flat baseline sampled-state distance: `793.81`
 - The `K=2` ablation is no longer the recommended setting:
   - it introduced one-off successes earlier,
@@ -43,6 +43,6 @@ Historical note: the success and distance values in this debug status are sample
 
 - Absolute Push-T coverage success is unsupported by this 4-episode debug backup.
 - The first complete-run criteria from the design spec should be treated as historical trajectory-diagnostic criteria.
-- The main remaining gap is optimization quality at larger scale:
-  - keep the `K=4, M=4` model as the current best setting,
-  - scale the winning setting to a larger Push-T or DROID subset next.
+- The main remaining gap is task-scale evidence:
+  - keep `K=4, M=4` only as a historical diagnostic configuration,
+  - rerun a coverage-primary scaled suite before making a method verdict.

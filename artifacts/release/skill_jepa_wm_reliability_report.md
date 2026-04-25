@@ -6,20 +6,20 @@ Use task-aligned coverage success as the primary Push-T metric. The tracked debu
 
 ## Legacy Locked Artifact Re-Score
 
-| Method | Coverage success | Goal-state success | Unique episodes | Mean sampled-state distance | Mean latency |
+| Method | Coverage success | Goal-state diagnostic | Unique episodes | Mean sampled-state distance | Mean latency |
 |---|---:|---:|---:|---:|---:|
 | flat | 0.00 | 0.07 | 1 | 355.30 | 0.564s |
 | hierarchical | 0.00 | 0.07 | 1 | 264.43 | 0.249s |
 
 The old `success_rate` column measured sampled-trajectory goal-state success, not standard Push-T coverage success.
-Phase A fresh eval: 1 sampled pairs, 1 unique episodes, requested_split=test, actual_split=test, subgoal_scope=train, goal_mode=trajectory, task_success_claim_supported=False.
+Phase A fresh eval: 1 sampled pairs, 1 unique episodes, requested_split=test, actual_split=test, subgoal_scope=train, goal_mode=trajectory, task_success_claim_supported=False, under_sampled=True, provenance_warnings=3.
 
 ## Phase A Fresh Eval
 
-| Method | Fixed-task coverage diagnostic | Goal-state success | Mean sampled-state distance | Mean latency |
+| Method | Coverage diagnostic | Goal-state diagnostic | Mean sampled-state distance | Mean latency |
 |---|---:|---:|---:|---:|
-| flat | 0.00 | 0.00 | 321.15 | 0.319s |
-| hierarchical | 0.00 | 0.00 | 464.56 | 0.131s |
+| flat | 0.00 | 0.00 | 321.15 | 0.300s |
+| hierarchical | 0.00 | 0.00 | 464.56 | 0.184s |
 
 ## Figures
 

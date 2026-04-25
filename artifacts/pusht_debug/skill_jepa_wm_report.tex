@@ -162,7 +162,7 @@ The corrected online task set is reachable under oracle replay of cached expert 
 \toprule
 Metric & Value \\
 \midrule
-Oracle replay sampled-goal success rate & 1.00 \\
+Oracle replay sampled-trajectory goal-state diagnostic rate & 1.00 \\
 Oracle replay mean sampled-state distance & 2.55 \\
 \bottomrule
 \end{tabular}
@@ -242,19 +242,19 @@ Push-T runtime & Patched local gymnasium and pymunk compatibility issues \\
 \section*{7. Conclusion}
 
 This work completed the Skill-JEPA-WM debug pipeline and produced a historical sampled-trajectory diagnostic result.
-The best current setting is the corrected \texttt{K=4} model with \texttt{execute\_actions\_per\_plan=4}.
-Its online Push-T debug result is:
+The archived diagnostic setting is the corrected \texttt{K=4} model with \texttt{execute\_actions\_per\_plan=4}.
+Its online Push-T debug diagnostic is:
 
 \begin{center}
 \fcolorbox{ReportBlue}{ReportBlue!6}{
 \begin{minipage}{0.9\linewidth}
-\textbf{Final headline result.}
-Hierarchical control reached \textbf{25\% sampled-goal success} and mean sampled-state distance \textbf{254.61}, while the matched flat controller stayed at \textbf{0\% sampled-goal success} and the labeled-only baseline also stayed at \textbf{0\% sampled-goal success}.
+\textbf{Historical trajectory diagnostic.}
+Hierarchical control reached \textbf{25\% sampled-trajectory goal-state success} and mean sampled-state distance \textbf{254.61}, while the matched flat controller stayed at \textbf{0\% sampled-trajectory goal-state success} and the labeled-only baseline also stayed at \textbf{0\% sampled-trajectory goal-state success}.
+These numbers are not standard Push-T coverage-success evidence.
 \end{minipage}
 }
 \end{center}
 
-The next step is not more plumbing.
-The next step is scaling the winning protocol to a larger Push-T or DROID subset and improving control quality against the oracle replay ceiling.
+The next step is a coverage-primary scaled suite before making a method verdict.
 
 \end{document}

@@ -1,13 +1,16 @@
 {
-  "cache_path": "../jepa-wms/outputs/skill_jepa/pusht_debug/cache/pusht_vjepa2_cache.h5",
-  "checkpoint": "../jepa-wms/outputs/skill_jepa/pusht_debug/joint/joint_best.pt",
+  "cache_path": "external/legacy_debug_cache.h5",
+  "checkpoint": "external/legacy_debug_joint_best.pt",
   "coverage_threshold": 0.95,
   "eval_split": "test",
   "execute_actions_per_plan": 4,
+  "external_inputs_not_committed": true,
   "flat": {
     "coverage_success_rate": 0.0,
     "final_latent_distance": 0.008878376810171175,
-    "goal_state_success_rate": 0.07,
+    "goal_state_success_diagnostic_rate": 0.07,
+    "goal_state_success_is_task_metric": false,
+    "goal_state_success_scope": "trajectory_target_diagnostic",
     "planning_latency_sec": 0.5641013694595243,
     "records": [
       {
@@ -1920,7 +1923,9 @@
   "hierarchical": {
     "coverage_success_rate": 0.0,
     "final_latent_distance": 0.009620743262348696,
-    "goal_state_success_rate": 0.07,
+    "goal_state_success_diagnostic_rate": 0.07,
+    "goal_state_success_is_task_metric": false,
+    "goal_state_success_scope": "trajectory_target_diagnostic",
     "planning_latency_sec": 0.2493375534135474,
     "records": [
       {
@@ -3832,5 +3837,6 @@
   "hierarchical_sampled_state_better_rate": 0.57,
   "max_episode_steps": 32,
   "mode": "both",
-  "num_eval_episodes": 100
+  "num_eval_episodes": 100,
+  "success_semantics": "success and success_rate are coverage-success after reliability re-score"
 }

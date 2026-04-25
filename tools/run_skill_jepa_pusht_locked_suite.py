@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import argparse
+import hashlib
 import os
 import subprocess
 import sys
@@ -93,7 +94,24 @@ def _git_commit() -> str | None:
     return result.stdout.strip()
 
 
-def _summary_matches_current(summary_path: Path, expected_goal_mode: str) -> bool:
+def _sha256_file(path: str | Path | None) -> str | None:
+    if path is None:
+        return None
+    file_path = Path(path)
+    if not file_path.exists() or not file_path.is_file():
+        return None
+    hasher = hashlib.sha256()
+    with open(file_path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def _summary_matches_current(
+    summary_path: Path,
+    expected_goal_mode: str,
+    expected_artifacts: dict[str, Path] | None = None,
+) -> bool:
     if not summary_path.exists():
         return False
     try:
@@ -101,7 +119,16 @@ def _summary_matches_current(summary_path: Path, expected_goal_mode: str) -> boo
             summary = json.load(handle)
     except (OSError, json.JSONDecodeError):
         return False
-    return summary.get("code_commit") == _git_commit() and summary.get("goal_mode") == expected_goal_mode
+    if summary.get("code_commit") != _git_commit() or summary.get("goal_mode") != expected_goal_mode:
+        return False
+    if not expected_artifacts:
+        return True
+    hashes = summary.get("hashes", {})
+    for key, path in expected_artifacts.items():
+        digest = _sha256_file(path)
+        if digest is not None and hashes.get(f"{key}_sha256") != digest:
+            return False
+    return True
 
 
 def _write_yaml(path: Path, payload: dict) -> None:
@@ -132,12 +159,28 @@ def _base_scaled_cfg(seed: int, labeled_fraction: float, seed_root: Path) -> dic
     return cfg
 
 
+def _attr_text(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        return value.decode("utf-8")
+    return str(value)
+
+
 def _validate_cache(path: Path) -> bool:
     if not path.exists():
         return False
     try:
         with h5py.File(path, "r") as handle:
-            return int(handle["ep_len"].shape[0]) == TOTAL_EPISODES and int(handle["episode_idx"].shape[0]) > 0
+            if int(handle["ep_len"].shape[0]) != TOTAL_EPISODES or int(handle["episode_idx"].shape[0]) <= 0:
+                return False
+            if _attr_text(handle.attrs.get("source_h5_sha256")) != (_sha256_file(FULL_RAW_H5) or ""):
+                return False
+            if _attr_text(handle.attrs.get("projector_ckpt_sha256")) != (_sha256_file(DEBUG_PROJECTOR) or ""):
+                return False
+            if _attr_text(handle.attrs.get("encoder_model_id")) is None:
+                return False
+            return True
     except OSError:
         return False
 
@@ -161,7 +204,14 @@ def ensure_scaled_cache() -> Path:
 def run_debug_reeval(force: bool = False) -> Path:
     out_dir = EVAL_ROOT / "current_best_checkpoint_100ep"
     summary_path = out_dir / "pusht_online_eval.json"
-    if not force and _summary_matches_current(summary_path, expected_goal_mode="trajectory"):
+    if not force and _summary_matches_current(
+        summary_path,
+        expected_goal_mode="trajectory",
+        expected_artifacts={
+            "config": DEBUG_CONFIG,
+            "checkpoint": DEBUG_CHECKPOINT,
+        },
+    ):
         return summary_path
     command = [
         str(PYTHON),
@@ -184,6 +234,9 @@ def run_debug_reeval(force: bool = False) -> Path:
         "train",
         "--goal-mode",
         "trajectory",
+        "--allow-under-sampling",
+        "--min-unique-episodes",
+        "1",
     ]
     if force or summary_path.exists():
         command.append("--force")
@@ -265,7 +318,16 @@ def evaluate_seed(seed: int, artifacts: dict[str, Path]) -> tuple[list[dict], li
         for goal_gap, num_eval, save_videos in GOAL_EVALS:
             out_dir = EVAL_ROOT / f"seed_{seed}" / config_name / f"goal_gap_{goal_gap}"
             summary_path = out_dir / "pusht_online_eval.json"
-            if not _summary_matches_current(summary_path, expected_goal_mode="task"):
+            if not _summary_matches_current(
+                summary_path,
+                expected_goal_mode="task",
+                expected_artifacts={
+                    "config": cfg_path,
+                    "checkpoint": checkpoint_path,
+                    "cache": CACHE_ROOT / "pusht_vjepa2_cache_13024ep.h5",
+                    "projector": DEBUG_PROJECTOR,
+                },
+            ):
                 command = [
                     str(PYTHON),
                     "-m",
@@ -297,6 +359,10 @@ def evaluate_seed(seed: int, artifacts: dict[str, Path]) -> tuple[list[dict], li
             with open(summary_path, "r", encoding="utf-8") as handle:
                 summary = json.load(handle)
             method_summary = summary[mode]
+            goal_state_rate = method_summary.get(
+                "goal_state_success_rate",
+                method_summary.get("goal_state_success_diagnostic_rate", method_summary["success_rate"]),
+            )
             rows.append(
                 {
                     "seed": seed,
@@ -306,7 +372,7 @@ def evaluate_seed(seed: int, artifacts: dict[str, Path]) -> tuple[list[dict], li
                     "mode": mode,
                     "success_rate": method_summary.get("coverage_success_rate", method_summary["success_rate"]),
                     "coverage_success_rate": method_summary.get("coverage_success_rate", method_summary["success_rate"]),
-                    "goal_state_success_rate": method_summary.get("goal_state_success_rate", method_summary["success_rate"]),
+                    "goal_state_success_diagnostic_rate": goal_state_rate,
                     "state_dist": method_summary["state_dist"],
                     "final_latent_distance": method_summary["final_latent_distance"],
                     "planning_latency_sec": method_summary["planning_latency_sec"],
@@ -340,7 +406,7 @@ def _save_current_best_csv(summary_path: Path) -> Path:
             fieldnames=[
                 "method",
                 "coverage_success_rate",
-                "goal_state_success_rate",
+                "goal_state_success_diagnostic_rate",
                 "state_dist",
                 "final_latent_distance",
                 "planning_latency_sec",
@@ -350,11 +416,15 @@ def _save_current_best_csv(summary_path: Path) -> Path:
         writer.writeheader()
         for method in ["hierarchical", "flat"]:
             payload = summary[method]
+            goal_state_rate = payload.get(
+                "goal_state_success_rate",
+                payload.get("goal_state_success_diagnostic_rate", payload["success_rate"]),
+            )
             writer.writerow(
                 {
                     "method": method,
                     "coverage_success_rate": payload.get("coverage_success_rate", payload["success_rate"]),
-                    "goal_state_success_rate": payload.get("goal_state_success_rate", payload["success_rate"]),
+                    "goal_state_success_diagnostic_rate": goal_state_rate,
                     "state_dist": payload["state_dist"],
                     "final_latent_distance": payload["final_latent_distance"],
                     "planning_latency_sec": payload["planning_latency_sec"],
@@ -589,6 +659,10 @@ def _collect_existing_results(seeds: list[int]) -> tuple[list[dict], list[dict]]
                     "random_skill_hier_10pct": "random_hierarchical",
                 }[config_name]
                 method_summary = summary[mode]
+                goal_state_rate = method_summary.get(
+                    "goal_state_success_rate",
+                    method_summary.get("goal_state_success_diagnostic_rate", method_summary["success_rate"]),
+                )
                 rows.append(
                     {
                         "seed": seed,
@@ -598,7 +672,7 @@ def _collect_existing_results(seeds: list[int]) -> tuple[list[dict], list[dict]]
                     "mode": mode,
                     "success_rate": method_summary.get("coverage_success_rate", method_summary["success_rate"]),
                     "coverage_success_rate": method_summary.get("coverage_success_rate", method_summary["success_rate"]),
-                    "goal_state_success_rate": method_summary.get("goal_state_success_rate", method_summary["success_rate"]),
+                    "goal_state_success_diagnostic_rate": goal_state_rate,
                     "state_dist": method_summary["state_dist"],
                         "final_latent_distance": method_summary["final_latent_distance"],
                         "planning_latency_sec": method_summary["planning_latency_sec"],

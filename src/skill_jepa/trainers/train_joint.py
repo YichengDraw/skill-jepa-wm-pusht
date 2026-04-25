@@ -8,7 +8,16 @@ import torch
 from torch.utils.data import DataLoader
 
 from skill_jepa.data import FeatureSequenceDataset
-from skill_jepa.trainers.common import build_all_modules, load_checkpoint, modules_to_device, parameters_for, save_checkpoint
+from skill_jepa.trainers.common import (
+    assert_checkpoint_config_compatible,
+    build_all_modules,
+    load_checkpoint,
+    load_checkpoint_subset,
+    modules_to_device,
+    parameters_for,
+    save_checkpoint,
+    same_file_identity,
+)
 from skill_jepa.trainers.objectives import compute_low_level_losses, compute_passive_losses
 from skill_jepa.utils import append_jsonl, choose_device, detach_metrics, ensure_dir, load_yaml, seed_everything, to_device
 
@@ -20,6 +29,20 @@ def _set_mode(modules, train: bool) -> None:
 
 def _subset_batch(batch, mask):
     return {key: value[mask] if torch.is_tensor(value) and value.shape[0] == mask.shape[0] else value for key, value in batch.items()}
+
+
+def _assert_low_level_passive_lineage(cfg: dict, low_level_payload: dict) -> None:
+    expected = cfg["training"].get("passive_checkpoint")
+    if not expected:
+        return
+    recorded = low_level_payload.get("config", {}).get("training", {}).get("passive_checkpoint")
+    if not recorded:
+        raise RuntimeError("Low-level checkpoint does not record its passive_checkpoint lineage")
+    if not same_file_identity(recorded, expected):
+        raise RuntimeError(
+            "Low-level checkpoint passive lineage does not match the requested passive_checkpoint: "
+            f"recorded={recorded}, current={expected}"
+        )
 
 
 def evaluate(loader, modules, cfg, device, step):
@@ -95,13 +118,22 @@ def main() -> None:
     modules = build_all_modules(cfg, cfg["data"]["cache_path"])
     if cfg["training"].get("passive_checkpoint"):
         passive_names = ["skill_idm", "skill_wm", "skill_prior", "skill_proj", "effect_proj"]
-        load_checkpoint(
+        passive_payload = load_checkpoint(
             cfg["training"]["passive_checkpoint"],
             {name: modules[name] for name in passive_names},
             strict_modules=True,
         )
+        assert_checkpoint_config_compatible(passive_payload, cfg, label="Passive checkpoint")
     if cfg["training"].get("low_level_checkpoint"):
-        load_checkpoint(cfg["training"]["low_level_checkpoint"], modules, strict_modules=True)
+        if not cfg["training"].get("passive_checkpoint"):
+            raise RuntimeError("Joint training with a low_level_checkpoint requires an explicit passive_checkpoint")
+        low_level_payload = load_checkpoint_subset(
+            cfg["training"]["low_level_checkpoint"],
+            modules,
+            required_modules=["action_chunk_encoder", "low_level_wm"],
+        )
+        assert_checkpoint_config_compatible(low_level_payload, cfg, label="Low-level checkpoint")
+        _assert_low_level_passive_lineage(cfg, low_level_payload)
     modules_to_device(modules, device)
     optimizer = torch.optim.AdamW(
         parameters_for(

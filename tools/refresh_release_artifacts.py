@@ -219,10 +219,10 @@ def summarize_records(records: list[dict]) -> dict[str, dict[str, float]]:
             "n": float(len(rows)),
             "unique_episodes": float(len({row["episode_id"] for row in rows})),
             "coverage_success_rate": float(np.mean([float(row["max_coverage"]) >= 0.95 for row in rows])),
-            "goal_state_success_rate": float(
+            "goal_state_success_diagnostic_rate": float(
                 np.mean(
                     [
-                        row.get("goal_state_success", row["success"]).lower() == "true"
+                        (row.get("goal_state_success") or row.get("success", "false")).lower() == "true"
                         for row in rows
                     ]
                 )
@@ -247,14 +247,19 @@ def sanitize_locked_in_place(records: list[dict], summary: dict[str, dict[str, f
     summary_path = LOCKED_EVAL / "pusht_online_eval.json"
     if summary_path.exists():
         payload = json.loads(summary_path.read_text(encoding="utf-8"))
-        payload["cache_path"] = "../jepa-wms/outputs/skill_jepa/pusht_debug/cache/pusht_vjepa2_cache.h5"
-        payload["checkpoint"] = "../jepa-wms/outputs/skill_jepa/pusht_debug/joint/joint_best.pt"
+        payload["cache_path"] = "external/legacy_debug_cache.h5"
+        payload["checkpoint"] = "external/legacy_debug_joint_best.pt"
+        payload["external_inputs_not_committed"] = True
         payload["coverage_threshold"] = 0.95
+        payload["success_semantics"] = "success and success_rate are coverage-success after reliability re-score"
         for method, method_summary in summary.items():
             if method not in payload:
                 continue
             payload[method]["coverage_success_rate"] = method_summary["coverage_success_rate"]
-            payload[method]["goal_state_success_rate"] = method_summary["goal_state_success_rate"]
+            payload[method].pop("goal_state_success_rate", None)
+            payload[method]["goal_state_success_diagnostic_rate"] = method_summary["goal_state_success_diagnostic_rate"]
+            payload[method]["goal_state_success_is_task_metric"] = False
+            payload[method]["goal_state_success_scope"] = "trajectory_target_diagnostic"
             payload[method]["unique_episode_count"] = int(method_summary["unique_episodes"])
             payload[method]["success_rate"] = method_summary["coverage_success_rate"]
             for record in payload[method].get("records", []):
@@ -270,11 +275,11 @@ def sanitize_locked_in_place(records: list[dict], summary: dict[str, dict[str, f
     for row in records:
         cleaned = dict(row)
         method = cleaned["method"]
-        goal_state_success = cleaned.get("goal_state_success", cleaned["success"])
+        goal_state_success = cleaned.get("goal_state_success") or cleaned.get("success", "False")
         coverage_success = str(float(cleaned["max_coverage"]) >= 0.95)
         cleaned["goal_state_success"] = goal_state_success
         cleaned["coverage_success"] = coverage_success
-        cleaned["success"] = coverage_success
+        cleaned.pop("success", None)
         cleaned["video_path"] = _legacy_video_path(method, cleaned.get("video_path")) or ""
         sanitized_records.append(cleaned)
     records_path = LOCKED_EVAL / "pusht_online_records.csv"
@@ -285,7 +290,6 @@ def sanitize_locked_in_place(records: list[dict], summary: dict[str, dict[str, f
         "start_index",
         "goal_index",
         "sampled_goal_gap",
-        "success",
         "coverage_success",
         "goal_state_success",
         "state_dist",
@@ -310,7 +314,7 @@ def sanitize_locked_in_place(records: list[dict], summary: dict[str, dict[str, f
             fieldnames=[
                 "method",
                 "coverage_success_rate",
-                "goal_state_success_rate",
+                "goal_state_success_diagnostic_rate",
                 "state_dist",
                 "planning_latency_sec",
             ],
@@ -322,7 +326,7 @@ def sanitize_locked_in_place(records: list[dict], summary: dict[str, dict[str, f
                 {
                     "method": method,
                     "coverage_success_rate": row["coverage_success_rate"],
-                    "goal_state_success_rate": row["goal_state_success_rate"],
+                    "goal_state_success_diagnostic_rate": row["goal_state_success_diagnostic_rate"],
                     "state_dist": row["state_dist"],
                     "planning_latency_sec": row["planning_latency_sec"],
                 }
@@ -345,6 +349,8 @@ def write_sanitized_locked_artifacts(records: list[dict], summary: dict[str, dic
     payload = {
         "source": "legacy locked artifact re-scored with coverage-first semantics",
         "coverage_threshold": 0.95,
+        "goal_state_success_scope": "trajectory_target_diagnostic",
+        "goal_state_success_is_task_metric": False,
         "methods": summary,
     }
     (out_dir / "pusht_online_eval_sanitized.json").write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
@@ -357,11 +363,16 @@ def write_plots(records: list[dict], summary: dict[str, dict[str, float]]) -> di
 
     fig, ax = plt.subplots(figsize=(7.6, 4.6))
     ax.bar(x - 0.18, [summary[m]["coverage_success_rate"] for m in methods], width=0.36, label="Coverage success")
-    ax.bar(x + 0.18, [summary[m]["goal_state_success_rate"] for m in methods], width=0.36, label="Goal-state success")
+    ax.bar(
+        x + 0.18,
+        [summary[m]["goal_state_success_diagnostic_rate"] for m in methods],
+        width=0.36,
+        label="Goal-state diagnostic",
+    )
     ax.set_xticks(x, methods)
     ax.set_ylim(0, 0.12)
     ax.set_ylabel("Rate")
-    ax.set_title("Legacy Locked Eval: Coverage vs Goal-State Success")
+    ax.set_title("Legacy Locked Eval: Coverage vs Goal-State Diagnostic")
     ax.legend()
     fig.tight_layout()
     coverage_plot = plot_dir / "coverage_vs_goal_state_success.png"
@@ -442,6 +453,12 @@ def copy_phase_a_if_present() -> dict | None:
     ensure_dir(PHASE_A_ARTIFACT)
     with open(summary_path, "r", encoding="utf-8") as handle:
         summary = json.load(handle)
+    summary["external_inputs_not_committed"] = True
+    summary["cache_path"] = "external/phase_a_debug_cache.h5"
+    summary["checkpoint"] = "external/phase_a_debug_joint_best.pt"
+    summary.setdefault("portable_paths", {})["cache_path"] = "external/phase_a_debug_cache.h5"
+    summary.setdefault("portable_paths", {})["checkpoint"] = "external/phase_a_debug_joint_best.pt"
+    summary.setdefault("portable_paths", {})["projector"] = "external/phase_a_debug_state_projector.pt"
     cfg_path = PHASE_A_ROOT / "phase_a_external_debug.yaml"
     if cfg_path.exists():
         with open(cfg_path, "r", encoding="utf-8") as handle:
@@ -465,6 +482,9 @@ def copy_phase_a_if_present() -> dict | None:
     for method in ["flat", "hierarchical", "random_hierarchical"]:
         if method not in summary:
             continue
+        if "goal_state_success_rate" in summary[method]:
+            summary[method]["goal_state_success_diagnostic_rate"] = summary[method].pop("goal_state_success_rate")
+        summary[method]["goal_state_success_is_task_metric"] = False
         for record in summary[method].get("records", []):
             video_path = record.get("video_path")
             if video_path:
@@ -502,20 +522,23 @@ def write_report(summary: dict[str, dict[str, float]], plots: dict[str, Path], m
             f"actual_split={phase_a.get('eval_split')}, "
             f"subgoal_scope={phase_a.get('subgoal_scope')}, "
             f"goal_mode={phase_a.get('goal_mode', 'legacy')}, "
-            f"task_success_claim_supported={phase_a.get('task_success_claim_supported', False)}."
+            f"task_success_claim_supported={phase_a.get('task_success_claim_supported', False)}, "
+            f"under_sampled={phase_a.get('under_sampled', False)}, "
+            f"provenance_warnings={len(phase_a.get('provenance', {}).get('warnings', []))}."
         )
         phase_a_table = [
             "",
             "## Phase A Fresh Eval",
             "",
-            "| Method | Fixed-task coverage diagnostic | Goal-state success | Mean sampled-state distance | Mean latency |",
+            "| Method | Coverage diagnostic | Goal-state diagnostic | Mean sampled-state distance | Mean latency |",
             "|---|---:|---:|---:|---:|",
         ]
         for method in ["flat", "hierarchical"]:
             if method in phase_a:
                 row = phase_a[method]
+                goal_rate = row.get("goal_state_success_rate", row.get("goal_state_success_diagnostic_rate", 0.0))
                 phase_a_table.append(
-                    f"| {method} | {row['coverage_success_rate']:.2f} | {row['goal_state_success_rate']:.2f} | "
+                    f"| {method} | {row['coverage_success_rate']:.2f} | {goal_rate:.2f} | "
                     f"{row['state_dist']:.2f} | {row['planning_latency_sec']:.3f}s |"
                 )
     lines = [
@@ -527,13 +550,13 @@ def write_report(summary: dict[str, dict[str, float]], plots: dict[str, Path], m
         "",
         "## Legacy Locked Artifact Re-Score",
         "",
-        "| Method | Coverage success | Goal-state success | Unique episodes | Mean sampled-state distance | Mean latency |",
+        "| Method | Coverage success | Goal-state diagnostic | Unique episodes | Mean sampled-state distance | Mean latency |",
         "|---|---:|---:|---:|---:|---:|",
     ]
     for method in ["flat", "hierarchical"]:
         row = summary[method]
         lines.append(
-            f"| {method} | {row['coverage_success_rate']:.2f} | {row['goal_state_success_rate']:.2f} | "
+            f"| {method} | {row['coverage_success_rate']:.2f} | {row['goal_state_success_diagnostic_rate']:.2f} | "
             f"{int(row['unique_episodes'])} | {row['state_dist']:.2f} | {row['planning_latency_sec']:.3f}s |"
         )
     lines.extend(
@@ -560,7 +583,7 @@ def write_report(summary: dict[str, dict[str, float]], plots: dict[str, Path], m
         for title, image_path in [
             ("Model Pipeline", DOCS / "model_pipeline.png"),
             ("Experiment Flow", DOCS / "experiment_flow.png"),
-            ("Coverage vs Goal-State Success", plots["coverage_plot"]),
+            ("Coverage vs Goal-State Diagnostic", plots["coverage_plot"]),
             ("Paired Sampled-State Distance", plots["distance_plot"]),
             ("Planning Latency", plots["latency_plot"]),
         ]:

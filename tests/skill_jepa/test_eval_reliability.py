@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 
 import h5py
@@ -8,18 +9,21 @@ from torch import nn
 
 from skill_jepa.analysis.eval_pusht_online import (
     NearestSubgoalResolver,
+    _assign_task_goals,
     _coverage_success,
     _eval_split_summary_fields,
     _goal_state_eval,
     _prepare_output_dir,
     _select_task_goal_indices,
     _set_eval_seed,
+    _same_record_rate,
     _validate_eval_provenance,
     _validate_goal_pairs,
 )
 from skill_jepa.data import EpisodeGoalSampler, split_episode_ids
 from skill_jepa.envs import PushTEnv
-from skill_jepa.trainers.common import load_checkpoint
+from skill_jepa.trainers.common import load_checkpoint, load_checkpoint_subset
+from skill_jepa.trainers.train_joint import _assert_low_level_passive_lineage, main as train_joint_main
 
 
 def _write_goal_cache(path: Path, ep_len: np.ndarray) -> None:
@@ -45,7 +49,9 @@ def test_goal_sampler_replacement_is_explicit(tmp_path: Path):
     _write_goal_cache(cache_path, np.array([6, 6, 6], dtype=np.int32))
     sampler = EpisodeGoalSampler(cache_path, split="train", val_fraction=0.0, test_fraction=0.0, seed=0, goal_gap=1)
 
-    without_replacement = sampler.sample(10, seed=0, allow_replacement=False)
+    with pytest.raises(ValueError, match="without replacement"):
+        sampler.sample(10, seed=0, allow_replacement=False)
+    without_replacement = sampler.sample(10, seed=0, allow_replacement=False, allow_under_sampling=True)
     with_replacement = sampler.sample(10, seed=0, allow_replacement=True)
 
     assert len(without_replacement) == 3
@@ -179,6 +185,58 @@ def test_task_goal_pool_rejects_cache_without_train_success_states(tmp_path: Pat
         env.close()
 
 
+def test_task_goal_pool_falls_back_to_full_train_scan_when_tail_misses(tmp_path: Path):
+    cache_path = tmp_path / "cache.h5"
+    _write_goal_cache(cache_path, np.array([5, 5, 5], dtype=np.int32))
+    train_id = int(split_episode_ids(3, val_fraction=0.0, test_fraction=0.34, seed=0)["train"][0])
+    with h5py.File(cache_path, "r+") as handle:
+        states = handle["state"][:]
+        states[:] = np.array([100.0, 100.0, 100.0, 100.0, 0.0], dtype=np.float32)
+        early_train_goal_index = int(handle["ep_offset"][train_id])
+        states[early_train_goal_index] = np.array([100.0, 100.0, 256.0, 256.0, np.pi / 4.0], dtype=np.float32)
+        handle["state"][:] = states
+
+    env = PushTEnv(render_size=224, legacy=False, with_velocity=False)
+    try:
+        goal_indices, coverages = _select_task_goal_indices(
+            cache_path,
+            env=env,
+            val_fraction=0.0,
+            test_fraction=0.34,
+            seed=0,
+            coverage_threshold=0.95,
+            tail_steps=1,
+        )
+    finally:
+        env.close()
+
+    assert goal_indices.tolist() == [early_train_goal_index]
+    assert coverages[0] >= 0.95
+
+
+def test_assign_task_goals_records_train_goal_identity(tmp_path: Path):
+    cache_path = tmp_path / "cache.h5"
+    _write_goal_cache(cache_path, np.array([4, 4, 4], dtype=np.int32))
+    goal_index = 1
+    with h5py.File(cache_path, "r") as handle:
+        expected_goal_state = handle["state"][goal_index].copy()
+        expected_goal_episode = int(handle["episode_idx"][goal_index])
+    pair = {
+        "episode_id": np.int64(2),
+        "start_index": np.int64(8),
+        "goal_index": np.int64(9),
+        "start_state": np.zeros(5, dtype=np.float32),
+        "goal_state": np.ones(5, dtype=np.float32),
+    }
+
+    [aligned] = _assign_task_goals([pair], cache_path, np.array([goal_index], dtype=np.int64), seed=0)
+
+    assert int(aligned["goal_index"]) == goal_index
+    assert int(aligned["goal_episode_id"]) == expected_goal_episode
+    assert aligned["goal_mode"] == "task"
+    np.testing.assert_allclose(aligned["goal_state"], expected_goal_state)
+
+
 def test_validate_goal_pairs_rejects_empty_eval():
     with pytest.raises(RuntimeError, match="No eval goal pairs"):
         _validate_goal_pairs([], min_unique_episodes=0)
@@ -189,6 +247,22 @@ def test_validate_goal_pairs_enforces_minimum_unique_episode_count():
 
     with pytest.raises(RuntimeError, match="Only sampled 1 unique episodes"):
         _validate_goal_pairs(pairs, min_unique_episodes=2)
+
+
+def test_same_record_rate_uses_metric_specific_direction():
+    records = {
+        "flat": [
+            {"coverage_success": False, "state_dist": 10.0},
+            {"coverage_success": True, "state_dist": 4.0},
+        ],
+        "hierarchical": [
+            {"coverage_success": True, "state_dist": 9.0},
+            {"coverage_success": False, "state_dist": 5.0},
+        ],
+    }
+
+    assert _same_record_rate(records, "flat", "hierarchical", "coverage_success", True) == 0.5
+    assert _same_record_rate(records, "flat", "hierarchical", "state_dist", False) == 0.5
 
 
 def test_eval_split_summary_records_requested_and_actual_split(tmp_path: Path):
@@ -220,8 +294,8 @@ def test_package_discovery_keeps_runtime_import_roots():
 
     include = set(pyproject["tool"]["setuptools"]["packages"]["find"]["include"])
     where = pyproject["tool"]["setuptools"]["packages"]["find"]["where"]
-    assert where == ["src"]
-    assert include == {"skill_jepa*"}
+    assert where == ["src", "."]
+    assert include == {"skill_jepa*", "tools*"}
 
 
 def test_pusht_env_is_packaged_under_skill_jepa_namespace():
@@ -293,6 +367,100 @@ def test_strict_checkpoint_loading_rejects_unexpected_modules(tmp_path: Path):
         load_checkpoint(checkpoint, modules, strict_modules=True)
 
 
+def test_checkpoint_subset_loads_required_modules_and_allows_extra_modules(tmp_path: Path):
+    checkpoint = tmp_path / "checkpoint.pt"
+    source = nn.Linear(1, 1)
+    target = nn.Linear(1, 1)
+    with torch.no_grad():
+        source.weight.fill_(3.0)
+        source.bias.fill_(4.0)
+        target.weight.zero_()
+        target.bias.zero_()
+    torch.save(
+        {
+            "modules": {
+                "needed": source.state_dict(),
+                "extra": nn.Linear(1, 1).state_dict(),
+            }
+        },
+        checkpoint,
+    )
+
+    load_checkpoint_subset(checkpoint, {"needed": target}, required_modules=["needed"])
+
+    assert torch.allclose(target.weight, torch.full_like(target.weight, 3.0))
+    assert torch.allclose(target.bias, torch.full_like(target.bias, 4.0))
+
+
+def test_checkpoint_subset_rejects_missing_required_modules(tmp_path: Path):
+    checkpoint = tmp_path / "checkpoint.pt"
+    torch.save({"modules": {"other": nn.Linear(1, 1).state_dict()}}, checkpoint)
+
+    with pytest.raises(RuntimeError, match="missing required modules"):
+        load_checkpoint_subset(checkpoint, {"needed": nn.Linear(1, 1)}, required_modules=["needed"])
+
+
+def test_joint_rejects_low_level_checkpoint_from_different_passive_lineage(tmp_path: Path):
+    recorded_passive = tmp_path / "recorded_passive.pt"
+    current_passive = tmp_path / "current_passive.pt"
+    recorded_passive.write_bytes(b"recorded")
+    current_passive.write_bytes(b"current")
+    cfg = {"training": {"passive_checkpoint": str(current_passive)}}
+    low_level_payload = {"config": {"training": {"passive_checkpoint": str(recorded_passive)}}}
+
+    with pytest.raises(RuntimeError, match="passive lineage"):
+        _assert_low_level_passive_lineage(cfg, low_level_payload)
+
+
+def test_joint_requires_passive_checkpoint_when_low_level_checkpoint_is_set(tmp_path: Path, monkeypatch):
+    cfg_path = tmp_path / "joint.yaml"
+    checkpoint = tmp_path / "low_level.pt"
+    output_dir = tmp_path / "joint_out"
+    checkpoint.write_bytes(b"placeholder")
+    cfg_path.write_text(
+        "\n".join(
+            [
+                "seed: 0",
+                "device: cpu",
+                "data:",
+                "  cache_path: unused.h5",
+                "  batch_size: 1",
+                "  num_workers: 0",
+                "  labeled_fraction: 0.1",
+                "  val_fraction: 0.0",
+                "  test_fraction: 0.0",
+                "training:",
+                f"  low_level_checkpoint: {checkpoint.as_posix()}",
+                "  passive_checkpoint: null",
+                f"  joint_output_dir: {output_dir.as_posix()}",
+                "  chunk_size: 1",
+                "  rollout_chunks: 1",
+                "  low_rollout_steps: 1",
+                "  lr: 0.001",
+                "  weight_decay: 0.0",
+                "  grad_clip: 1.0",
+                "  epochs: 0",
+                "  log_every: 1",
+                "model: {}",
+                "planner: {}",
+                "loss: {}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("sys.argv", ["train_joint", "--config", str(cfg_path)])
+    monkeypatch.setattr("skill_jepa.trainers.train_joint.FeatureSequenceDataset", lambda *args, **kwargs: [])
+    monkeypatch.setattr("skill_jepa.trainers.train_joint.DataLoader", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        "skill_jepa.trainers.train_joint.build_all_modules",
+        lambda cfg, cache_path: {"skill_idm": nn.Linear(1, 1), "action_chunk_encoder": nn.Linear(1, 1)},
+    )
+
+    with pytest.raises(RuntimeError, match="requires an explicit passive_checkpoint"):
+        train_joint_main()
+
+
 def test_prepare_output_dir_rejects_partial_stale_outputs(tmp_path: Path):
     out_dir = tmp_path / "eval"
     out_dir.mkdir()
@@ -338,6 +506,22 @@ def test_subgoal_resolver_respects_allowed_indices(tmp_path: Path):
     assert torch.allclose(subgoal_s, torch.tensor([[1.0, 1.0]]))
 
 
+def test_subgoal_resolver_maps_sparse_allowed_indices_to_matching_s(tmp_path: Path):
+    cache_path = tmp_path / "cache.h5"
+    z = np.zeros((6, 2), dtype=np.float32)
+    z[2] = np.array([10.0, 0.0], dtype=np.float32)
+    z[5] = np.array([0.0, 10.0], dtype=np.float32)
+    s = np.arange(6, dtype=np.float32).reshape(6, 1, 1)
+    with h5py.File(cache_path, "w") as handle:
+        handle.create_dataset("z", data=z)
+        handle.create_dataset("s", data=s)
+
+    resolver = NearestSubgoalResolver(str(cache_path), torch.device("cpu"), chunk_size=1, allowed_indices=np.array([2, 5]))
+    subgoal_s = resolver(torch.tensor([0.0, 9.5]))
+
+    assert torch.allclose(subgoal_s, torch.tensor([[5.0]]))
+
+
 def test_subgoal_resolver_rejects_empty_allowed_indices(tmp_path: Path):
     cache_path = tmp_path / "cache.h5"
     with h5py.File(cache_path, "w") as handle:
@@ -372,3 +556,78 @@ def test_eval_provenance_rejects_projector_mismatch(tmp_path: Path):
 
     with pytest.raises(RuntimeError, match="projector"):
         _validate_eval_provenance(cfg, checkpoint_payload)
+
+
+def test_eval_provenance_requires_checkpoint_config(tmp_path: Path):
+    cache_path = tmp_path / "cache.h5"
+    projector = tmp_path / "projector.pt"
+    projector.write_bytes(b"projector")
+    with h5py.File(cache_path, "w") as handle:
+        handle.attrs["projector_ckpt"] = str(projector)
+    cfg = {
+        "data": {"cache_path": str(cache_path), "projector_ckpt": str(projector)},
+        "encoder": {"model_id": "encoder", "state_dim": 4},
+        "model": {"hidden_dim": 8},
+    }
+
+    with pytest.raises(RuntimeError, match="training config"):
+        _validate_eval_provenance(cfg, checkpoint_payload={})
+
+
+def test_eval_provenance_rejects_in_place_projector_overwrite(tmp_path: Path):
+    cache_path = tmp_path / "cache.h5"
+    projector = tmp_path / "projector.pt"
+    projector.write_bytes(b"current-projector")
+    with h5py.File(cache_path, "w") as handle:
+        handle.attrs["projector_ckpt"] = str(projector)
+        handle.attrs["projector_ckpt_sha256"] = hashlib.sha256(b"old-projector").hexdigest()
+
+    cfg = {
+        "data": {"cache_path": str(cache_path), "projector_ckpt": str(projector)},
+        "encoder": {"model_id": "encoder", "state_dim": 4},
+        "model": {"hidden_dim": 8},
+    }
+    checkpoint_payload = {
+        "config": {
+            "data": {"cache_path": str(cache_path), "projector_ckpt": str(projector)},
+            "encoder": cfg["encoder"],
+            "model": cfg["model"],
+        },
+        "artifact_hashes": {
+            "data.cache_path": hashlib.sha256(cache_path.read_bytes()).hexdigest(),
+            "data.projector_ckpt": hashlib.sha256(b"current-projector").hexdigest(),
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="projector_ckpt_sha256"):
+        _validate_eval_provenance(cfg, checkpoint_payload)
+
+
+def test_eval_provenance_reports_cache_hash_check_when_available(tmp_path: Path):
+    cache_path = tmp_path / "cache.h5"
+    projector = tmp_path / "projector.pt"
+    projector.write_bytes(b"projector")
+    with h5py.File(cache_path, "w") as handle:
+        handle.attrs["projector_ckpt"] = str(projector)
+        handle.attrs["projector_ckpt_sha256"] = hashlib.sha256(b"projector").hexdigest()
+
+    cfg = {
+        "data": {"cache_path": str(cache_path), "projector_ckpt": str(projector)},
+        "encoder": {"model_id": "encoder", "state_dim": 4},
+        "model": {"hidden_dim": 8},
+    }
+    checkpoint_payload = {
+        "config": {
+            "data": {"cache_path": str(cache_path), "projector_ckpt": str(projector)},
+            "encoder": cfg["encoder"],
+            "model": cfg["model"],
+        },
+        "artifact_hashes": {
+            "data.cache_path": hashlib.sha256(cache_path.read_bytes()).hexdigest(),
+            "data.projector_ckpt": hashlib.sha256(b"projector").hexdigest(),
+        },
+    }
+
+    summary = _validate_eval_provenance(cfg, checkpoint_payload)
+
+    assert summary["cache_projector_hash_checked"]

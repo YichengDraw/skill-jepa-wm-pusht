@@ -1,17 +1,21 @@
 {
   "allow_replacement": false,
   "allow_split_fallback": false,
-  "cache_path": "../jepa-wms/outputs/skill_jepa/pusht_debug/cache/pusht_vjepa2_cache.h5",
-  "checkpoint": "../jepa-wms/outputs/skill_jepa/pusht_debug/joint/joint_best.pt",
-  "code_commit": "724bb0081d2840f532c4015cfa01feb388192dee",
+  "allow_under_sampling": true,
+  "cache_path": "external/phase_a_debug_cache.h5",
+  "checkpoint": "external/phase_a_debug_joint_best.pt",
+  "code_commit": "867a91ed6a24f248ac246aa9d38c887884354a60",
   "coverage_threshold": 0.95,
   "eval_split": "test",
   "execute_actions_per_plan": 4,
+  "external_inputs_not_committed": true,
   "flat": {
     "coverage_success_rate": 0.0,
     "final_latent_distance": 0.01786930114030838,
-    "goal_state_success_rate": 0.0,
-    "planning_latency_sec": 0.31880156250554137,
+    "goal_state_success_diagnostic_rate": 0.0,
+    "goal_state_success_is_task_metric": false,
+    "goal_state_success_scope": "trajectory_target_diagnostic",
+    "planning_latency_sec": 0.3004580000124406,
     "records": [
       {
         "coverage_success": false,
@@ -24,7 +28,7 @@
         "goal_mode": "trajectory",
         "goal_state_success": false,
         "max_coverage": 0.17450593355568816,
-        "planning_latency_sec": 0.31880156250554137,
+        "planning_latency_sec": 0.3004580000124406,
         "sampled_goal_gap": 26,
         "skill_consistency": 0.0,
         "start_index": 52,
@@ -51,8 +55,10 @@
   "hierarchical": {
     "coverage_success_rate": 0.0,
     "final_latent_distance": 0.01786930114030838,
-    "goal_state_success_rate": 0.0,
-    "planning_latency_sec": 0.13076061249012128,
+    "goal_state_success_diagnostic_rate": 0.0,
+    "goal_state_success_is_task_metric": false,
+    "goal_state_success_scope": "trajectory_target_diagnostic",
+    "planning_latency_sec": 0.18408157500380185,
     "records": [
       {
         "coverage_success": false,
@@ -65,7 +71,7 @@
         "goal_mode": "trajectory",
         "goal_state_success": false,
         "max_coverage": 0.17450593355568816,
-        "planning_latency_sec": 0.13076061249012128,
+        "planning_latency_sec": 0.18408157500380185,
         "sampled_goal_gap": 26,
         "skill_consistency": 0.18830398935824633,
         "start_index": 52,
@@ -83,15 +89,25 @@
   },
   "hierarchical_coverage_better_rate": 0.0,
   "hierarchical_goal_state_better_rate": 0.0,
+  "hierarchical_goal_state_diagnostic_better_rate": 0.0,
   "hierarchical_sampled_state_better_rate": 0.0,
   "max_episode_steps": 32,
   "mode": "both",
   "num_eval_episodes": 1,
   "portable_paths": {
-    "cache_path": "../jepa-wms/outputs/skill_jepa/pusht_debug/cache/pusht_vjepa2_cache.h5",
-    "checkpoint": "../jepa-wms/outputs/skill_jepa/pusht_debug/joint/joint_best.pt",
+    "cache_path": "external/phase_a_debug_cache.h5",
+    "checkpoint": "external/phase_a_debug_joint_best.pt",
     "config": "artifacts/phase_a_current_checkpoint/evals/phase_a_external_debug.yaml",
-    "projector": "../jepa-wms/outputs/skill_jepa/pusht_debug/cache/state_projector.pt"
+    "projector": "external/phase_a_debug_state_projector.pt"
+  },
+  "provenance": {
+    "cache_projector_hash_checked": false,
+    "cache_source_hash_recorded": false,
+    "warnings": [
+      "Checkpoint does not record data.cache_path hash; path/file identity checks were used",
+      "Checkpoint does not record data.projector_ckpt hash; path/file identity checks were used",
+      "Cache does not record projector_ckpt_sha256; projector overwrite detection is unavailable"
+    ]
   },
   "requested_eval_split": "test",
   "requested_num_eval_episodes": 100,
@@ -102,5 +118,6 @@
   "task_goal_split": null,
   "task_goal_tail_steps": null,
   "task_success_claim_supported": false,
+  "under_sampled": true,
   "unique_episode_count": 1
 }

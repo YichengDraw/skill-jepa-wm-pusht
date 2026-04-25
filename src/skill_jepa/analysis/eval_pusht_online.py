@@ -217,7 +217,7 @@ def _candidate_tail_indices(cache_path: str | Path, episode_ids: np.ndarray, tai
     for episode_id in np.asarray(episode_ids, dtype=np.int64).tolist():
         offset = int(ep_offset[episode_id])
         length = int(ep_len[episode_id])
-        local_start = max(0, length - int(tail_steps))
+        local_start = 0 if int(tail_steps) <= 0 else max(0, length - int(tail_steps))
         indices.extend(range(offset + local_start, offset + length))
     return np.asarray(indices, dtype=np.int64)
 
@@ -238,9 +238,15 @@ def _select_task_goal_indices(
         candidate_indices = _candidate_tail_indices(cache_path, train_ids, tail_steps)
         if len(candidate_indices) == 0:
             return candidate_indices, np.asarray([], dtype=np.float32)
-        env.reset_to_state = np.asarray(states[int(candidate_indices[0])], dtype=np.float32)
-        env.reset()
-        coverages = np.asarray([_state_coverage(env, states[int(index)]) for index in candidate_indices], dtype=np.float32)
+        def score(indices: np.ndarray) -> np.ndarray:
+            env.reset_to_state = np.asarray(states[int(indices[0])], dtype=np.float32)
+            env.reset()
+            return np.asarray([_state_coverage(env, states[int(index)]) for index in indices], dtype=np.float32)
+
+        coverages = score(candidate_indices)
+        if not np.any(coverages >= float(coverage_threshold)) and int(tail_steps) > 0:
+            candidate_indices = _candidate_tail_indices(cache_path, train_ids, tail_steps=0)
+            coverages = score(candidate_indices)
     goal_mask = coverages >= float(coverage_threshold)
     if not np.any(goal_mask):
         best = float(coverages.max()) if len(coverages) else float("nan")
@@ -571,26 +577,65 @@ def _assert_same_file_identity(label: str, recorded: object, current: object) ->
         )
 
 
-def _validate_eval_provenance(cfg: dict, checkpoint_payload: dict) -> None:
+def _attr_text(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        return value.decode("utf-8")
+    return str(value)
+
+
+def _validate_eval_provenance(cfg: dict, checkpoint_payload: dict) -> dict[str, object]:
+    warnings: list[str] = []
     checkpoint_cfg = checkpoint_payload.get("config", {})
-    if checkpoint_cfg:
-        for section in ["encoder", "model"]:
-            if checkpoint_cfg.get(section) != cfg.get(section):
-                raise RuntimeError(f"Checkpoint {section} config does not match the runtime config")
-        checkpoint_data = checkpoint_cfg.get("data", {})
-        _assert_same_file_identity(
-            "Checkpoint cache_path",
-            checkpoint_data.get("cache_path"),
-            cfg.get("data", {}).get("cache_path"),
-        )
-        _assert_same_file_identity(
-            "Checkpoint projector_ckpt",
-            checkpoint_data.get("projector_ckpt"),
-            cfg.get("data", {}).get("projector_ckpt"),
-        )
+    if not checkpoint_cfg:
+        raise RuntimeError("Checkpoint does not record its training config")
+    for section in ["encoder", "model"]:
+        if checkpoint_cfg.get(section) != cfg.get(section):
+            raise RuntimeError(f"Checkpoint {section} config does not match the runtime config")
+    checkpoint_data = checkpoint_cfg.get("data", {})
+    _assert_same_file_identity(
+        "Checkpoint cache_path",
+        checkpoint_data.get("cache_path"),
+        cfg.get("data", {}).get("cache_path"),
+    )
+    _assert_same_file_identity(
+        "Checkpoint projector_ckpt",
+        checkpoint_data.get("projector_ckpt"),
+        cfg.get("data", {}).get("projector_ckpt"),
+    )
+    checkpoint_hashes = checkpoint_payload.get("artifact_hashes", {})
+    runtime_hashes = {
+        "data.cache_path": _sha256_file(cfg.get("data", {}).get("cache_path")),
+        "data.projector_ckpt": _sha256_file(cfg.get("data", {}).get("projector_ckpt")),
+    }
+    for key, runtime_hash in runtime_hashes.items():
+        if runtime_hash is None:
+            continue
+        recorded_hash = checkpoint_hashes.get(key)
+        if recorded_hash is None:
+            warnings.append(f"Checkpoint does not record {key} hash; path/file identity checks were used")
+            continue
+        if recorded_hash != runtime_hash:
+            raise RuntimeError(f"Checkpoint {key} hash does not match the runtime artifact")
     with h5py.File(cfg["data"]["cache_path"], "r") as handle:
-        cache_projector = handle.attrs.get("projector_ckpt")
+        cache_projector = _attr_text(handle.attrs.get("projector_ckpt"))
+        cache_projector_hash = _attr_text(handle.attrs.get("projector_ckpt_sha256"))
+        cache_source_hash = _attr_text(handle.attrs.get("source_h5_sha256"))
     _assert_same_file_identity("Cache projector_ckpt", cache_projector, cfg["data"].get("projector_ckpt"))
+    cache_projector_hash_checked = False
+    current_projector_hash = _sha256_file(cfg["data"].get("projector_ckpt"))
+    if cache_projector_hash and current_projector_hash:
+        if cache_projector_hash != current_projector_hash:
+            raise RuntimeError("Cache projector_ckpt_sha256 does not match the runtime projector checkpoint")
+        cache_projector_hash_checked = True
+    else:
+        warnings.append("Cache does not record projector_ckpt_sha256; projector overwrite detection is unavailable")
+    return {
+        "cache_projector_hash_checked": cache_projector_hash_checked,
+        "cache_source_hash_recorded": bool(cache_source_hash),
+        "warnings": warnings,
+    }
 
 
 def main() -> None:
@@ -612,6 +657,7 @@ def main() -> None:
     parser.add_argument("--video-fps", type=int, default=6)
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--allow-replacement", action="store_true")
+    parser.add_argument("--allow-under-sampling", action="store_true")
     parser.add_argument("--allow-split-fallback", action="store_true")
     parser.add_argument("--min-unique-episodes", type=int, default=0)
     parser.add_argument("--deterministic-timing", action="store_true")
@@ -638,8 +684,11 @@ def main() -> None:
 
     modules = build_all_modules(cfg, cfg["data"]["cache_path"])
     checkpoint_payload = load_checkpoint(args.checkpoint, modules, strict_modules=True)
+    provenance_summary = {"cache_projector_hash_checked": False, "cache_source_hash_recorded": False, "warnings": []}
     if not args.allow_provenance_mismatch:
-        _validate_eval_provenance(cfg, checkpoint_payload)
+        provenance_summary = _validate_eval_provenance(cfg, checkpoint_payload)
+    else:
+        provenance_summary["warnings"] = ["Provenance validation was disabled by --allow-provenance-mismatch"]
     modules_to_device(modules, device)
     for module in modules.values():
         module.eval()
@@ -675,6 +724,7 @@ def main() -> None:
         seed=cfg["seed"],
         max_goal_gap=planner_cfg.get("max_episode_steps"),
         allow_replacement=args.allow_replacement,
+        allow_under_sampling=args.allow_under_sampling,
     )
     split_summary = _eval_split_summary_fields(sampler, eval_split)
     unique_episode_count = _validate_goal_pairs(goal_pairs, int(args.min_unique_episodes))
@@ -728,6 +778,11 @@ def main() -> None:
     methods = _resolve_methods(args.mode)
     execute_actions_per_plan = int(planner_cfg.get("execute_actions_per_plan", 1))
     records_by_method: dict[str, list[dict]] = {}
+    goal_state_scope = (
+        "trajectory_target_diagnostic"
+        if args.goal_mode == "trajectory"
+        else "sampled_train_task_goal_pose_diagnostic"
+    )
     summary: dict[str, object] = {
         "cache_path": _portable_path(cfg["data"]["cache_path"]),
         "checkpoint": _portable_path(args.checkpoint),
@@ -755,7 +810,10 @@ def main() -> None:
         "requested_num_eval_episodes": int(planner_cfg["num_eval_episodes"]),
         "unique_episode_count": unique_episode_count,
         "allow_replacement": bool(args.allow_replacement),
+        "allow_under_sampling": bool(args.allow_under_sampling),
+        "under_sampled": bool(len(goal_pairs) < int(planner_cfg["num_eval_episodes"])),
         "allow_split_fallback": bool(args.allow_split_fallback),
+        "provenance": provenance_summary,
         "subgoal_scope": args.subgoal_scope,
     }
     try:
@@ -791,7 +849,10 @@ def main() -> None:
                 )
                 method_records.append(asdict(record))
             records_by_method[method] = method_records
-            summary[method] = {
+            goal_state_success_rate = (
+                float(np.mean([record["goal_state_success"] for record in method_records])) if method_records else 0.0
+            )
+            method_summary = {
                 "final_latent_distance": float(np.mean([record["final_latent_distance"] for record in method_records]))
                 if method_records
                 else 0.0,
@@ -809,18 +870,25 @@ def main() -> None:
                 "coverage_success_rate": float(np.mean([record["coverage_success"] for record in method_records]))
                 if method_records
                 else 0.0,
-                "goal_state_success_rate": float(np.mean([record["goal_state_success"] for record in method_records]))
-                if method_records
-                else 0.0,
+                "goal_state_success_diagnostic_rate": goal_state_success_rate,
+                "goal_state_success_is_task_metric": False,
+                "goal_state_success_scope": goal_state_scope,
                 "unique_episode_count": len({record["episode_id"] for record in method_records}),
             }
+            if args.goal_mode == "trajectory":
+                method_summary["goal_state_success_rate"] = goal_state_success_rate
+            summary[method] = method_summary
         if "hierarchical" in summary and "flat" in summary:
             summary["hierarchical_coverage_better_rate"] = _same_record_rate(
                 records_by_method, "flat", "hierarchical", "coverage_success", True
             )
-            summary["hierarchical_goal_state_better_rate"] = _same_record_rate(
+            summary["hierarchical_goal_state_diagnostic_better_rate"] = _same_record_rate(
                 records_by_method, "flat", "hierarchical", "goal_state_success", True
             )
+            if args.goal_mode == "trajectory":
+                summary["hierarchical_goal_state_better_rate"] = summary[
+                    "hierarchical_goal_state_diagnostic_better_rate"
+                ]
             summary["hierarchical_sampled_state_better_rate"] = _same_record_rate(
                 records_by_method, "flat", "hierarchical", "state_dist", False
             )
@@ -828,9 +896,13 @@ def main() -> None:
             summary["hierarchical_vs_random_coverage_better_rate"] = _same_record_rate(
                 records_by_method, "random_hierarchical", "hierarchical", "coverage_success", True
             )
-            summary["hierarchical_vs_random_goal_state_better_rate"] = _same_record_rate(
+            summary["hierarchical_vs_random_goal_state_diagnostic_better_rate"] = _same_record_rate(
                 records_by_method, "random_hierarchical", "hierarchical", "goal_state_success", True
             )
+            if args.goal_mode == "trajectory":
+                summary["hierarchical_vs_random_goal_state_better_rate"] = summary[
+                    "hierarchical_vs_random_goal_state_diagnostic_better_rate"
+                ]
             summary["hierarchical_vs_random_sampled_state_better_rate"] = _same_record_rate(
                 records_by_method, "random_hierarchical", "hierarchical", "state_dist", False
             )

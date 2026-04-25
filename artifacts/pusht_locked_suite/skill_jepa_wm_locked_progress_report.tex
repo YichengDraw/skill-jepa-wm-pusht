@@ -92,7 +92,7 @@ I reran the current best Push-T debug checkpoint on \textbf{100 evaluation episo
 \begin{tabular}{lrrrr}
 \toprule
 \rowcolor{ReportBlue!10}
-Method & Goal-state Success & Sampled-State Dist. & Planning Latency & Notes \\
+Method & Goal-state Diagnostic & Sampled-State Dist. & Planning Latency & Notes \\
 \midrule
 Hierarchical & 0.07 & 264.43 & 0.249 s & same checkpoint \\
 Flat & 0.07 & 355.30 & 0.564 s & same checkpoint \\
@@ -176,19 +176,19 @@ It also means the absence of scaled results is a true missing result, not a hidd
 
 \section*{6. Interpretation Of The New 100-Episode Result}
 
-The new reevaluation materially weakens the earlier short-run headline.
+The new reevaluation materially weakens the earlier short-run diagnostic.
 On the larger 100-episode test:
 
 \begin{itemize}
 \item hierarchy keeps a meaningful pose-distance advantage,
 \item hierarchy keeps a large latency advantage,
-\item hierarchy does \textbf{not} improve success rate over flat on the current best debug checkpoint.
+\item hierarchy does \textbf{not} improve standard Push-T coverage success over flat on the current best debug checkpoint.
 \end{itemize}
 
 So the current evidence supports this narrower claim:
 
 \begin{quote}
-Under the locked debug checkpoint, hierarchy improves control quality and planning efficiency, but the stronger claim that hierarchy improves success rate is not supported by the 100-episode reevaluation.
+Under the locked debug checkpoint, hierarchy improves sampled-state distance and planning efficiency, but the stronger claim that hierarchy improves standard Push-T coverage success is not supported by the 100-episode reevaluation.
 \end{quote}
 
 That is exactly why the scaled pilot remains necessary before any new model component is added.
