@@ -623,6 +623,7 @@ def _task_success_claim_supported(
     allow_under_sampling: bool,
     allow_split_fallback: bool,
     subgoal_scope: str,
+    provenance_warning_count: int = 0,
 ) -> bool:
     return bool(
         goal_mode == "task"
@@ -633,6 +634,7 @@ def _task_success_claim_supported(
         and not allow_under_sampling
         and not allow_split_fallback
         and subgoal_scope in {"train", "none"}
+        and int(provenance_warning_count) == 0
     )
 
 
@@ -812,6 +814,13 @@ def main() -> None:
         provenance_summary = _validate_eval_provenance(cfg, checkpoint_payload)
     else:
         provenance_summary["warnings"] = ["Provenance validation was disabled by --allow-provenance-mismatch"]
+    provenance_warnings = [str(warning) for warning in provenance_summary.get("warnings", [])]
+    provenance_warning_count = len(provenance_warnings)
+    if args.goal_mode == "task" and provenance_warning_count:
+        raise RuntimeError(
+            "Task-mode evaluation requires complete provenance; rerun cache/training with current provenance "
+            "or use --goal-mode trajectory for diagnostic evaluation"
+        )
     modules_to_device(modules, device)
     for module in modules.values():
         module.eval()
@@ -950,6 +959,7 @@ def main() -> None:
             allow_under_sampling=bool(args.allow_under_sampling),
             allow_split_fallback=bool(args.allow_split_fallback),
             subgoal_scope=str(args.subgoal_scope),
+            provenance_warning_count=provenance_warning_count,
         ),
         "unique_episode_count": unique_episode_count,
         "allow_replacement": bool(args.allow_replacement),
@@ -957,6 +967,8 @@ def main() -> None:
         "under_sampled": bool(len(goal_pairs) < int(planner_cfg["num_eval_episodes"])),
         "allow_split_fallback": bool(args.allow_split_fallback),
         "provenance": provenance_summary,
+        "provenance_complete": provenance_warning_count == 0,
+        "provenance_warning_count": provenance_warning_count,
         "subgoal_scope": args.subgoal_scope,
     }
     try:

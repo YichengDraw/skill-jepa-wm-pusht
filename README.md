@@ -170,8 +170,8 @@ The corrected evaluator was rerun against the available external debug cache/che
 
 | Method | Coverage diagnostic | Goal-state diagnostic | Mean sampled-state distance | Mean planning latency |
 |---|---:|---:|---:|---:|
-| Hierarchical | 0.00 | 0.00 | 464.56 | 0.227 s |
-| Flat | 0.00 | 0.00 | 321.15 | 0.561 s |
+| Hierarchical | 0.00 | 0.00 | 464.56 | 0.352 s |
+| Flat | 0.00 | 0.00 | 321.15 | 0.794 s |
 
 ## Tracked Artifacts
 

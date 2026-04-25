@@ -146,6 +146,7 @@ def _summary_matches_current(
     expected_goal_mode: str,
     expected_artifacts: dict[str, Path] | None = None,
     expected_fields: dict[str, object] | None = None,
+    allow_provenance_warnings: bool = False,
 ) -> bool:
     if not summary_path.exists():
         return False
@@ -164,6 +165,8 @@ def _summary_matches_current(
     if not isinstance(provenance, dict):
         return False
     warnings = [str(warning) for warning in provenance.get("warnings", [])]
+    if warnings and not allow_provenance_warnings:
+        return False
     if any("Provenance validation was disabled" in warning or "--allow-provenance-mismatch" in warning for warning in warnings):
         return False
     for key, expected in (expected_fields or {}).items():
@@ -194,6 +197,57 @@ def _summary_methods(summary: dict) -> list[str]:
     if mode in {"flat", "hierarchical", "random_hierarchical"}:
         return [str(mode)]
     return []
+
+
+def _record_value_matches(row_value: str | None, expected_value: object) -> bool:
+    if row_value is None:
+        return False
+    if expected_value is None:
+        return row_value == ""
+    if isinstance(expected_value, bool):
+        return row_value.lower() == str(expected_value).lower()
+    if isinstance(expected_value, int):
+        try:
+            return int(row_value) == int(expected_value)
+        except ValueError:
+            return False
+    if isinstance(expected_value, float):
+        try:
+            return abs(float(row_value) - float(expected_value)) <= 1e-9 * max(1.0, abs(float(expected_value)))
+        except ValueError:
+            return False
+    return str(row_value) == str(expected_value)
+
+
+def _records_match_summary(records_path: Path, summary: dict, mode: str) -> bool:
+    if not records_path.exists():
+        return False
+    method_summary = summary.get(mode)
+    if not isinstance(method_summary, dict):
+        return False
+    expected_records = method_summary.get("records")
+    if not isinstance(expected_records, list):
+        return False
+    try:
+        with open(records_path, "r", encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            fieldnames = set(reader.fieldnames or [])
+            if {"success", "success_rate"} & fieldnames:
+                return False
+            rows = list(reader)
+    except OSError:
+        return False
+    if any(row.get("method") != mode for row in rows):
+        return False
+    if len(rows) != len(expected_records):
+        return False
+    for row, expected_record in zip(rows, expected_records):
+        if not isinstance(expected_record, dict):
+            return False
+        for key, expected_value in expected_record.items():
+            if key not in row or not _record_value_matches(row.get(key), expected_value):
+                return False
+    return True
 
 
 def _write_yaml(path: Path, payload: dict) -> None:
@@ -351,6 +405,7 @@ def run_debug_reeval(force: bool = False) -> Path:
             "allow_split_fallback": False,
             "deterministic_timing": False,
         },
+        allow_provenance_warnings=True,
     ):
         return summary_path
     command = [
@@ -463,7 +518,8 @@ def evaluate_seed(seed: int, artifacts: dict[str, Path]) -> tuple[list[dict], li
         for goal_gap, num_eval, save_videos in GOAL_EVALS:
             out_dir = EVAL_ROOT / f"seed_{seed}" / config_name / f"goal_gap_{goal_gap}"
             summary_path = out_dir / "pusht_online_eval.json"
-            if not _summary_matches_current(
+            records_path = out_dir / "pusht_online_records.csv"
+            summary_current = _summary_matches_current(
                 summary_path,
                 expected_goal_mode="task",
                 expected_artifacts={
@@ -483,7 +539,12 @@ def evaluate_seed(seed: int, artifacts: dict[str, Path]) -> tuple[list[dict], li
                     "allow_split_fallback": False,
                     "deterministic_timing": False,
                 },
-            ):
+            )
+            records_current = False
+            if summary_current:
+                with open(summary_path, "r", encoding="utf-8") as handle:
+                    records_current = _records_match_summary(records_path, json.load(handle), mode)
+            if not (summary_current and records_current):
                 command = [
                     str(PYTHON),
                     "-m",
@@ -514,6 +575,8 @@ def evaluate_seed(seed: int, artifacts: dict[str, Path]) -> tuple[list[dict], li
                 _run_logged(command, LOG_ROOT / f"seed_{seed}_{config_name}_gap_{goal_gap}.log")
             with open(summary_path, "r", encoding="utf-8") as handle:
                 summary = json.load(handle)
+            if not _records_match_summary(records_path, summary, mode):
+                raise RuntimeError(f"Evaluation records are stale or inconsistent with summary: {records_path}")
             method_summary = summary[mode]
             coverage_rate = _coverage_success_rate(method_summary)
             goal_state_rate = _goal_state_diagnostic_rate(method_summary)
@@ -533,7 +596,6 @@ def evaluate_seed(seed: int, artifacts: dict[str, Path]) -> tuple[list[dict], li
                     "summary_path": _path_str(summary_path),
                 }
             )
-            records_path = out_dir / "pusht_online_records.csv"
             with open(records_path, "r", encoding="utf-8", newline="") as handle:
                 for record in csv.DictReader(handle):
                     episode_rows.append(
@@ -836,6 +898,10 @@ def _collect_existing_results(seeds: list[int]) -> tuple[list[dict], list[dict]]
                     raise RuntimeError(f"Existing aggregate-only evaluation is stale or unverifiable: {summary_path}")
                 with open(summary_path, "r", encoding="utf-8") as handle:
                     summary = json.load(handle)
+                if not _records_match_summary(records_path, summary, mode):
+                    raise RuntimeError(
+                        f"Existing aggregate-only evaluation records are stale or inconsistent: {records_path}"
+                    )
                 method_summary = summary[mode]
                 coverage_rate = _coverage_success_rate(method_summary)
                 goal_state_rate = _goal_state_diagnostic_rate(method_summary)
@@ -843,12 +909,12 @@ def _collect_existing_results(seeds: list[int]) -> tuple[list[dict], list[dict]]
                     {
                         "seed": seed,
                         "config_name": config_name,
-                    "goal_gap": goal_gap,
-                    "num_eval_episodes": summary["num_eval_episodes"],
-                    "mode": mode,
-                    "coverage_success_rate": coverage_rate,
-                    "goal_state_success_diagnostic_rate": goal_state_rate,
-                    "state_dist": method_summary["state_dist"],
+                        "goal_gap": goal_gap,
+                        "num_eval_episodes": summary["num_eval_episodes"],
+                        "mode": mode,
+                        "coverage_success_rate": coverage_rate,
+                        "goal_state_success_diagnostic_rate": goal_state_rate,
+                        "state_dist": method_summary["state_dist"],
                         "final_latent_distance": method_summary["final_latent_distance"],
                         "planning_latency_sec": method_summary["planning_latency_sec"],
                         "skill_consistency": method_summary["skill_consistency"],

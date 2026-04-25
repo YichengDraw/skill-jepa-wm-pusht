@@ -1,8 +1,6 @@
 import hashlib
-import ast
-import inspect
 import json
-import textwrap
+import sys
 from pathlib import Path
 
 import h5py
@@ -528,6 +526,7 @@ def test_task_success_claim_gate_rejects_smoke_or_confounded_evals():
     assert not _task_success_claim_supported("task", "val", 3, 3, 1, True, False, False, "train")
     assert not _task_success_claim_supported("task", "val", 3, 3, 3, False, False, True, "train")
     assert not _task_success_claim_supported("task", "val", 3, 3, 3, False, False, False, "all")
+    assert not _task_success_claim_supported("task", "val", 3, 3, 3, False, False, False, "train", 1)
 
 
 def test_eval_split_summary_records_requested_and_actual_split(tmp_path: Path):
@@ -686,21 +685,223 @@ def test_set_eval_seed_calls_environment_seed():
     assert env.seeds == [123]
 
 
-def test_online_eval_loop_reseeds_environment_at_episode_callsite():
-    tree = ast.parse(textwrap.dedent(inspect.getsource(online_eval.main)))
-    calls = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_set_eval_seed"
-    ]
-
-    assert any(
-        call.args
-        and isinstance(call.args[0], ast.Name)
-        and call.args[0].id == "episode_seed"
-        and any(keyword.arg == "env" and isinstance(keyword.value, ast.Name) and keyword.value.id == "env" for keyword in call.keywords)
-        for call in calls
+def test_online_eval_loop_reseeds_environment_per_method_episode(tmp_path: Path, monkeypatch):
+    cfg_path = tmp_path / "config.yaml"
+    checkpoint = tmp_path / "checkpoint.pt"
+    projector = tmp_path / "projector.pt"
+    output = tmp_path / "eval"
+    checkpoint.write_bytes(b"checkpoint")
+    torch.save({}, projector)
+    cfg_path.write_text(
+        "\n".join(
+            [
+                "seed: 5",
+                "device: cpu",
+                "encoder:",
+                "  model_id: fake",
+                "  dtype: float32",
+                "  state_dim: 4",
+                "  pool_grid: 2",
+                "data:",
+                "  cache_path: fake_cache.h5",
+                f"  projector_ckpt: {projector.as_posix()}",
+                "  val_fraction: 0.2",
+                "  test_fraction: 0.2",
+                "planner:",
+                "  goal_gap: 1",
+                "  num_eval_episodes: 2",
+                "  max_episode_steps: 4",
+                "  execute_actions_per_plan: 1",
+                "  eval_seed: 11",
+                "model: {}",
+            ]
+        ),
+        encoding="utf-8",
     )
+
+    class FakeModule:
+        def eval(self):
+            return self
+
+    class FakeEncoder:
+        hidden_size = 4
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+    class FakeProjector:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def load_state_dict(self, state):
+            return None
+
+        def to(self, device):
+            return self
+
+        def eval(self):
+            return self
+
+    class FakeSampler:
+        requested_split = "test"
+        actual_split = "test"
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def sample(self, *args, **kwargs):
+            return [
+                {
+                    "episode_id": np.int64(10),
+                    "start_index": np.int64(1),
+                    "goal_index": np.int64(2),
+                    "start_state": np.zeros(5, dtype=np.float32),
+                    "goal_state": np.ones(5, dtype=np.float32),
+                },
+                {
+                    "episode_id": np.int64(11),
+                    "start_index": np.int64(3),
+                    "goal_index": np.int64(4),
+                    "start_state": np.zeros(5, dtype=np.float32),
+                    "goal_state": np.ones(5, dtype=np.float32),
+                },
+            ]
+
+    class FakeEnv:
+        success_threshold = 0.95
+
+        def __init__(self):
+            self.seeds = []
+            self.closed = False
+
+        def seed(self, seed):
+            self.seeds.append(int(seed))
+
+        def close(self):
+            self.closed = True
+
+    env = FakeEnv()
+
+    def fake_run_episode(**kwargs):
+        return online_eval.OnlineEvalRecord(
+            episode_idx=int(kwargs["episode_idx"]),
+            eval_seed=int(kwargs["eval_seed"]),
+            episode_id=int(kwargs["episode_id"]),
+            start_index=int(kwargs["start_index"]),
+            goal_index=int(kwargs["goal_index"]),
+            goal_episode_id=int(kwargs["goal_episode_id"]),
+            goal_mode=str(kwargs["goal_mode"]),
+            sampled_goal_gap=1,
+            coverage_success=False,
+            goal_state_success=False,
+            state_dist=1.0,
+            final_latent_distance=1.0,
+            start_latent_distance=2.0,
+            planning_latency_sec=0.0,
+            max_coverage=0.0,
+            final_coverage=0.0,
+            steps_taken=0,
+            skill_consistency=0.0,
+            video_path=None,
+        )
+
+    monkeypatch.setattr(online_eval, "build_all_modules", lambda cfg, cache_path: {"module": FakeModule()})
+    monkeypatch.setattr(online_eval, "load_checkpoint", lambda *args, **kwargs: {"config": {}})
+    monkeypatch.setattr(online_eval, "modules_to_device", lambda modules, device: None)
+    monkeypatch.setattr(online_eval, "FrozenVJEPA2Encoder", FakeEncoder)
+    monkeypatch.setattr(online_eval, "StateProjector", FakeProjector)
+    monkeypatch.setattr(online_eval, "cache_metadata", lambda cache_path: {"action_dim": 2})
+    monkeypatch.setattr(online_eval, "_build_planners", lambda *args, **kwargs: {"flat": object(), "hierarchical": object()})
+    monkeypatch.setattr(online_eval, "EpisodeGoalSampler", FakeSampler)
+    monkeypatch.setattr(online_eval, "_make_env", lambda with_velocity: env)
+    monkeypatch.setattr(online_eval, "_run_episode", fake_run_episode)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "eval_pusht_online",
+            "--config",
+            str(cfg_path),
+            "--checkpoint",
+            str(checkpoint),
+            "--output",
+            str(output),
+            "--mode",
+            "both",
+            "--goal-mode",
+            "trajectory",
+            "--allow-provenance-mismatch",
+            "--force",
+        ],
+    )
+
+    online_eval.main()
+
+    assert env.seeds == [11, 12, 11, 12]
+    assert env.closed
+
+
+def test_online_task_eval_rejects_incomplete_provenance_before_rollout(tmp_path: Path, monkeypatch):
+    cfg_path = tmp_path / "config.yaml"
+    checkpoint = tmp_path / "checkpoint.pt"
+    projector = tmp_path / "projector.pt"
+    output = tmp_path / "eval"
+    checkpoint.write_bytes(b"checkpoint")
+    torch.save({}, projector)
+    cfg_path.write_text(
+        "\n".join(
+            [
+                "seed: 5",
+                "device: cpu",
+                "encoder:",
+                "  model_id: fake",
+                "  dtype: float32",
+                "  state_dim: 4",
+                "  pool_grid: 2",
+                "data:",
+                "  cache_path: fake_cache.h5",
+                f"  projector_ckpt: {projector.as_posix()}",
+                "  val_fraction: 0.2",
+                "  test_fraction: 0.2",
+                "planner:",
+                "  goal_gap: 1",
+                "  num_eval_episodes: 1",
+                "  max_episode_steps: 4",
+                "  eval_seed: 11",
+                "model: {}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(online_eval, "build_all_modules", lambda cfg, cache_path: {"module": nn.Linear(1, 1)})
+    monkeypatch.setattr(online_eval, "load_checkpoint", lambda *args, **kwargs: {"config": {}})
+    monkeypatch.setattr(
+        online_eval,
+        "_validate_eval_provenance",
+        lambda cfg, checkpoint_payload: {"warnings": ["Checkpoint does not record code provenance"]},
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "eval_pusht_online",
+            "--config",
+            str(cfg_path),
+            "--checkpoint",
+            str(checkpoint),
+            "--output",
+            str(output),
+            "--mode",
+            "flat",
+            "--goal-mode",
+            "task",
+            "--force",
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="Task-mode evaluation requires complete provenance"):
+        online_eval.main()
 
 
 def test_strict_checkpoint_loading_rejects_missing_modules(tmp_path: Path):
@@ -1078,6 +1279,38 @@ def test_locked_suite_summary_freshness_rejects_provenance_disabled(tmp_path: Pa
     )
 
 
+def test_locked_suite_summary_freshness_rejects_generic_provenance_warnings(tmp_path: Path, monkeypatch):
+    checkpoint = tmp_path / "checkpoint.pt"
+    checkpoint.write_bytes(b"current")
+    summary_path = tmp_path / "pusht_online_eval.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "code_commit": "abc123",
+                "code_dirty": False,
+                "goal_mode": "task",
+                "provenance": {"warnings": ["Checkpoint does not record code provenance"]},
+                "hashes": {"checkpoint_sha256": hashlib.sha256(b"current").hexdigest()},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(locked_suite, "_git_commit", lambda: "abc123")
+    monkeypatch.setattr(locked_suite, "_git_dirty", lambda: False)
+
+    assert not locked_suite._summary_matches_current(
+        summary_path,
+        expected_goal_mode="task",
+        expected_artifacts={"checkpoint": checkpoint},
+    )
+    assert locked_suite._summary_matches_current(
+        summary_path,
+        expected_goal_mode="task",
+        expected_artifacts={"checkpoint": checkpoint},
+        allow_provenance_warnings=True,
+    )
+
+
 def test_locked_suite_summary_freshness_checks_deterministic_timing_field(tmp_path: Path, monkeypatch):
     checkpoint = tmp_path / "checkpoint.pt"
     checkpoint.write_bytes(b"current")
@@ -1153,8 +1386,9 @@ def test_locked_suite_debug_reeval_freshness_checks_cache_hash(tmp_path: Path, m
     )
     seen: dict[str, Path] = {}
 
-    def fake_matches(summary_path, expected_goal_mode, expected_artifacts, expected_fields):
+    def fake_matches(summary_path, expected_goal_mode, expected_artifacts, expected_fields, allow_provenance_warnings=False):
         seen.update(expected_artifacts)
+        assert allow_provenance_warnings
         return True
 
     monkeypatch.setattr(locked_suite, "EVAL_ROOT", tmp_path / "evals")
@@ -1275,6 +1509,99 @@ def test_locked_suite_aggregate_only_rejects_stale_existing_eval(tmp_path: Path,
     monkeypatch.setattr(locked_suite, "_git_dirty", lambda: False)
 
     with pytest.raises(RuntimeError, match="stale or unverifiable"):
+        locked_suite._collect_existing_results([0])
+
+
+def test_locked_suite_aggregate_only_rejects_stale_records_csv(tmp_path: Path, monkeypatch):
+    output_root = tmp_path / "suite"
+    config_root = output_root / "configs"
+    eval_root = output_root / "evals"
+    cache_root = output_root / "cache"
+    cfg_path = config_root / "seed_0_joint10.yaml"
+    checkpoint = output_root / "seed_0" / "joint_10pct" / "joint" / "joint_best.pt"
+    cache = cache_root / "pusht_vjepa2_cache_13024ep.h5"
+    projector = tmp_path / "projector.pt"
+    summary_dir = eval_root / "seed_0" / "joint_hier_10pct" / "goal_gap_24"
+    for path in [cfg_path, checkpoint, cache, projector]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"artifact")
+    summary_dir.mkdir(parents=True)
+    expected_record = {
+        "episode_idx": 0,
+        "eval_seed": 123,
+        "episode_id": 10,
+        "start_index": 20,
+        "goal_index": 44,
+        "goal_episode_id": 99,
+        "goal_mode": "task",
+        "sampled_goal_gap": 24,
+        "coverage_success": False,
+        "goal_state_success": True,
+        "state_dist": 1.25,
+        "final_latent_distance": 2.5,
+        "start_latent_distance": 3.5,
+        "planning_latency_sec": 0.01,
+        "max_coverage": 0.0,
+        "final_coverage": 0.0,
+        "steps_taken": 1,
+        "skill_consistency": 0.5,
+        "video_path": None,
+    }
+    (summary_dir / "pusht_online_eval.json").write_text(
+        json.dumps(
+            {
+                "code_commit": "current",
+                "code_dirty": False,
+                "goal_mode": "task",
+                "mode": "hierarchical",
+                "requested_eval_split": "val",
+                "subgoal_scope": "train",
+                "goal_gap": 24,
+                "requested_num_eval_episodes": 100,
+                "allow_replacement": False,
+                "allow_under_sampling": False,
+                "allow_split_fallback": False,
+                "deterministic_timing": False,
+                "provenance": {"warnings": []},
+                "hashes": {
+                    "config_sha256": hashlib.sha256(b"artifact").hexdigest(),
+                    "checkpoint_sha256": hashlib.sha256(b"artifact").hexdigest(),
+                    "cache_sha256": hashlib.sha256(b"artifact").hexdigest(),
+                    "projector_sha256": hashlib.sha256(b"artifact").hexdigest(),
+                },
+                "hierarchical": {
+                    "coverage_success_rate": 0.0,
+                    "goal_state_success_diagnostic_rate": 1.0,
+                    "state_dist": 1.25,
+                    "final_latent_distance": 2.5,
+                    "planning_latency_sec": 0.01,
+                    "skill_consistency": 0.5,
+                    "records": [expected_record],
+                },
+                "num_eval_episodes": 100,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (summary_dir / "pusht_online_records.csv").write_text(
+        "method,episode_idx,eval_seed,episode_id\nWRONG_METHOD,999,123,10\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(locked_suite, "OUTPUT_ROOT", output_root)
+    monkeypatch.setattr(locked_suite, "CONFIG_ROOT", config_root)
+    monkeypatch.setattr(locked_suite, "EVAL_ROOT", eval_root)
+    monkeypatch.setattr(locked_suite, "CACHE_ROOT", cache_root)
+    monkeypatch.setattr(locked_suite, "DEBUG_PROJECTOR", projector)
+    monkeypatch.setattr(locked_suite, "GOAL_EVALS", [(24, 100, False)])
+    monkeypatch.setattr(
+        locked_suite,
+        "_eval_specs",
+        lambda artifacts: [("joint_hier_10pct", cfg_path, checkpoint, "hierarchical")],
+    )
+    monkeypatch.setattr(locked_suite, "_git_commit", lambda: "current")
+    monkeypatch.setattr(locked_suite, "_git_dirty", lambda: False)
+
+    with pytest.raises(RuntimeError, match="records are stale or inconsistent"):
         locked_suite._collect_existing_results([0])
 
 
