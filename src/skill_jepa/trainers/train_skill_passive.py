@@ -44,6 +44,8 @@ def main() -> None:
     device = choose_device(cfg.get("device"))
     out_dir = ensure_dir(cfg["training"]["passive_output_dir"])
     seq_len = cfg["training"]["chunk_size"] * cfg["training"]["rollout_chunks"] + 1
+    split_seed = cfg["data"].get("split_seed", cfg["seed"])
+    labeled_seed = cfg["data"].get("labeled_seed", cfg["seed"] + 17)
 
     train_set = FeatureSequenceDataset(
         cache_path=cfg["data"]["cache_path"],
@@ -54,6 +56,8 @@ def main() -> None:
         test_fraction=cfg["data"]["test_fraction"],
         stride=cfg["data"].get("stride", 1),
         seed=cfg["seed"],
+        split_seed=split_seed,
+        labeled_seed=labeled_seed,
     )
     val_set = FeatureSequenceDataset(
         cache_path=cfg["data"]["cache_path"],
@@ -64,6 +68,8 @@ def main() -> None:
         test_fraction=cfg["data"]["test_fraction"],
         stride=cfg["data"].get("val_stride", cfg["data"].get("stride", 1)),
         seed=cfg["seed"],
+        split_seed=split_seed,
+        labeled_seed=labeled_seed,
     )
     train_loader = DataLoader(
         train_set,

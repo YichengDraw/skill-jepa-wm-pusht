@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 import shutil
@@ -259,7 +260,7 @@ def sanitize_locked_in_place(records: list[dict], summary: dict[str, dict[str, f
             payload[method].pop("goal_state_success_rate", None)
             payload[method]["goal_state_success_diagnostic_rate"] = method_summary["goal_state_success_diagnostic_rate"]
             payload[method]["goal_state_success_is_task_metric"] = False
-            payload[method]["goal_state_success_scope"] = "trajectory_target_diagnostic"
+            payload[method]["goal_state_success_scope"] = "trajectory_full_state_diagnostic"
             payload[method]["unique_episode_count"] = int(method_summary["unique_episodes"])
             payload[method]["success_rate"] = method_summary["coverage_success_rate"]
             for record in payload[method].get("records", []):
@@ -349,7 +350,7 @@ def write_sanitized_locked_artifacts(records: list[dict], summary: dict[str, dic
     payload = {
         "source": "legacy locked artifact re-scored with coverage-first semantics",
         "coverage_threshold": 0.95,
-        "goal_state_success_scope": "trajectory_target_diagnostic",
+        "goal_state_success_scope": "trajectory_full_state_diagnostic",
         "goal_state_success_is_task_metric": False,
         "methods": summary,
     }
@@ -441,10 +442,10 @@ def write_montage() -> Path | None:
     return out_path
 
 
-def copy_phase_a_if_present() -> dict | None:
+def copy_phase_a_if_present(ingest_local_outputs: bool = False) -> dict | None:
     summary_path = PHASE_A_OUTPUT / "pusht_online_eval.json"
     records_path = PHASE_A_OUTPUT / "pusht_online_records.csv"
-    if not summary_path.exists() or not records_path.exists():
+    if not ingest_local_outputs or not summary_path.exists() or not records_path.exists():
         artifact_summary = PHASE_A_ARTIFACT / "pusht_online_eval.json"
         if artifact_summary.exists():
             with open(artifact_summary, "r", encoding="utf-8") as handle:
@@ -454,8 +455,10 @@ def copy_phase_a_if_present() -> dict | None:
     with open(summary_path, "r", encoding="utf-8") as handle:
         summary = json.load(handle)
     summary["external_inputs_not_committed"] = True
+    summary["code_commit_semantics"] = "code_commit records the evaluator source commit at run time; the artifact commit is necessarily later"
     summary["cache_path"] = "external/phase_a_debug_cache.h5"
     summary["checkpoint"] = "external/phase_a_debug_joint_best.pt"
+    summary["success_semantics"] = "success and success_rate are Push-T coverage_success; goal_state_success is diagnostic only"
     summary.setdefault("portable_paths", {})["cache_path"] = "external/phase_a_debug_cache.h5"
     summary.setdefault("portable_paths", {})["checkpoint"] = "external/phase_a_debug_joint_best.pt"
     summary.setdefault("portable_paths", {})["projector"] = "external/phase_a_debug_state_projector.pt"
@@ -609,6 +612,13 @@ def write_report(summary: dict[str, dict[str, float]], plots: dict[str, Path], m
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--ingest-local-phase-a",
+        action="store_true",
+        help="Copy Phase A outputs from ignored outputs/ into tracked artifacts; default is reproducible tracked-only refresh.",
+    )
+    args = parser.parse_args()
     write_mmd()
     render_diagrams()
     records = read_locked_records()
@@ -617,7 +627,7 @@ def main() -> None:
     write_sanitized_locked_artifacts(records, summary)
     plots = write_plots(records, summary)
     montage = write_montage()
-    phase_a = copy_phase_a_if_present()
+    phase_a = copy_phase_a_if_present(ingest_local_outputs=bool(args.ingest_local_phase_a))
     write_report(summary, plots, montage, phase_a)
 
 

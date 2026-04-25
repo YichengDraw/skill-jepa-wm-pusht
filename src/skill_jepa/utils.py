@@ -37,6 +37,11 @@ def seed_everything(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+    if hasattr(torch, "use_deterministic_algorithms"):
+        torch.use_deterministic_algorithms(True, warn_only=True)
+    if hasattr(torch.backends, "cudnn"):
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
 
 
 def to_device(batch: Dict[str, Any], device: torch.device) -> Dict[str, Any]:
@@ -63,4 +68,3 @@ def choose_device(device: str | None = None) -> torch.device:
     if device is not None:
         return torch.device(device)
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-

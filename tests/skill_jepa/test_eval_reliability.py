@@ -1,4 +1,5 @@
 import hashlib
+import json
 from pathlib import Path
 
 import h5py
@@ -17,13 +18,18 @@ from skill_jepa.analysis.eval_pusht_online import (
     _select_task_goal_indices,
     _set_eval_seed,
     _same_record_rate,
+    _split_step_indices,
+    _summarize_method_records,
+    _task_success_claim_supported,
     _validate_eval_provenance,
     _validate_goal_pairs,
 )
-from skill_jepa.data import EpisodeGoalSampler, split_episode_ids
+from skill_jepa.data import EpisodeGoalSampler, FeatureSequenceDataset, split_episode_ids
 from skill_jepa.envs import PushTEnv
-from skill_jepa.trainers.common import load_checkpoint, load_checkpoint_subset
+from skill_jepa.trainers.common import assert_checkpoint_config_compatible, load_checkpoint, load_checkpoint_subset
 from skill_jepa.trainers.train_joint import _assert_low_level_passive_lineage, main as train_joint_main
+from tools import refresh_release_artifacts as release_artifacts
+from tools import run_skill_jepa_pusht_locked_suite as locked_suite
 
 
 def _write_goal_cache(path: Path, ep_len: np.ndarray) -> None:
@@ -117,6 +123,40 @@ def test_split_episode_ids_keeps_train_val_test_disjoint_when_test_rounds_high()
     assert train_ids | val_ids | test_ids == {0, 1, 2}
 
 
+def test_feature_dataset_can_hold_split_and_labeled_subset_fixed_across_training_seeds(tmp_path: Path):
+    cache_path = tmp_path / "cache.h5"
+    _write_goal_cache(cache_path, np.array([8, 8, 8, 8, 8, 8], dtype=np.int32))
+
+    left = FeatureSequenceDataset(
+        cache_path,
+        sequence_length=2,
+        split="train",
+        labeled_fraction=0.5,
+        val_fraction=0.2,
+        test_fraction=0.2,
+        seed=1,
+        split_seed=0,
+        labeled_seed=0,
+    )
+    right = FeatureSequenceDataset(
+        cache_path,
+        sequence_length=2,
+        split="train",
+        labeled_fraction=0.5,
+        val_fraction=0.2,
+        test_fraction=0.2,
+        seed=2,
+        split_seed=0,
+        labeled_seed=0,
+    )
+    try:
+        assert left.split_ids.tolist() == right.split_ids.tolist()
+        assert left.labeled_ids == right.labeled_ids
+    finally:
+        left.close()
+        right.close()
+
+
 def test_goal_sampler_uses_valid_episodes_instead_of_dropping_short_draws(tmp_path: Path):
     cache_path = tmp_path / "cache.h5"
     _write_goal_cache(cache_path, np.array([10, 10, 100, 100], dtype=np.int32))
@@ -164,6 +204,28 @@ def test_task_goal_pool_uses_train_split_success_states(tmp_path: Path):
 
     assert goal_indices.tolist() == [train_goal_index]
     assert coverages[0] >= 0.95
+
+
+def test_train_scoped_subgoal_indices_use_data_split_seed(tmp_path: Path):
+    cache_path = tmp_path / "cache.h5"
+    _write_goal_cache(cache_path, np.array([4, 4, 4, 4, 4, 4], dtype=np.int32))
+    cfg = {
+        "seed": 999,
+        "data": {
+            "val_fraction": 0.2,
+            "test_fraction": 0.2,
+            "split_seed": 0,
+        },
+    }
+
+    indices = _split_step_indices(str(cache_path), "train", cfg)
+    with h5py.File(cache_path, "r") as handle:
+        actual_episode_ids = set(handle["episode_idx"][indices].astype(int).tolist())
+    expected_episode_ids = set(split_episode_ids(6, val_fraction=0.2, test_fraction=0.2, seed=0)["train"].tolist())
+    wrong_episode_ids = set(split_episode_ids(6, val_fraction=0.2, test_fraction=0.2, seed=999)["train"].tolist())
+
+    assert actual_episode_ids == expected_episode_ids
+    assert actual_episode_ids != wrong_episode_ids
 
 
 def test_task_goal_pool_rejects_cache_without_train_success_states(tmp_path: Path):
@@ -265,6 +327,55 @@ def test_same_record_rate_uses_metric_specific_direction():
     assert _same_record_rate(records, "flat", "hierarchical", "state_dist", False) == 0.5
 
 
+def test_method_summary_keeps_success_rate_coverage_backed_when_goal_state_disagrees():
+    records = [
+        {
+            "episode_id": 1,
+            "coverage_success": True,
+            "goal_state_success": False,
+            "final_latent_distance": 1.0,
+            "planning_latency_sec": 0.1,
+            "skill_consistency": 0.2,
+            "state_dist": 99.0,
+        },
+        {
+            "episode_id": 2,
+            "coverage_success": False,
+            "goal_state_success": True,
+            "final_latent_distance": 3.0,
+            "planning_latency_sec": 0.3,
+            "skill_consistency": 0.4,
+            "state_dist": 1.0,
+        },
+    ]
+
+    summary = _summarize_method_records(records, "sampled_train_task_goal_full_state_diagnostic")
+
+    assert summary["success_rate"] == 0.5
+    assert summary["coverage_success_rate"] == 0.5
+    assert summary["goal_state_success_diagnostic_rate"] == 0.5
+    assert "goal_state_success_rate" not in summary
+    assert not summary["goal_state_success_is_task_metric"]
+
+
+def test_task_success_claim_gate_rejects_smoke_or_confounded_evals():
+    assert _task_success_claim_supported(
+        goal_mode="task",
+        actual_split="val",
+        requested_count=3,
+        sampled_count=3,
+        unique_episode_count=3,
+        allow_replacement=False,
+        allow_under_sampling=False,
+        allow_split_fallback=False,
+    )
+    assert not _task_success_claim_supported("trajectory", "val", 3, 3, 3, False, False, False)
+    assert not _task_success_claim_supported("task", "train", 3, 3, 3, False, False, False)
+    assert not _task_success_claim_supported("task", "val", 3, 1, 1, False, True, False)
+    assert not _task_success_claim_supported("task", "val", 3, 3, 1, True, False, False)
+    assert not _task_success_claim_supported("task", "val", 3, 3, 3, False, False, True)
+
+
 def test_eval_split_summary_records_requested_and_actual_split(tmp_path: Path):
     cache_path = tmp_path / "cache.h5"
     _write_goal_cache(cache_path, np.array([6, 6], dtype=np.int32))
@@ -296,6 +407,10 @@ def test_package_discovery_keeps_runtime_import_roots():
     where = pyproject["tool"]["setuptools"]["packages"]["find"]["where"]
     assert where == ["src", "."]
     assert include == {"skill_jepa*", "tools*"}
+    manifest = (Path(__file__).resolve().parents[2] / "MANIFEST.in").read_text(encoding="utf-8")
+    assert "recursive-include configs *.yaml" in manifest
+    assert "recursive-include docs *.md *.mmd *.png *.svg" in manifest
+    assert "recursive-include artifacts *.csv *.gif *.json *.md *.pdf *.png *.svg *.tex *.yaml" in manifest
 
 
 def test_pusht_env_is_packaged_under_skill_jepa_namespace():
@@ -367,6 +482,14 @@ def test_strict_checkpoint_loading_rejects_unexpected_modules(tmp_path: Path):
         load_checkpoint(checkpoint, modules, strict_modules=True)
 
 
+def test_strict_checkpoint_loading_rejects_incompatible_module_shapes(tmp_path: Path):
+    checkpoint = tmp_path / "checkpoint.pt"
+    torch.save({"modules": {"present": nn.Linear(2, 1).state_dict()}}, checkpoint)
+
+    with pytest.raises(RuntimeError, match="size mismatch"):
+        load_checkpoint(checkpoint, {"present": nn.Linear(1, 1)}, strict_modules=True)
+
+
 def test_checkpoint_subset_loads_required_modules_and_allows_extra_modules(tmp_path: Path):
     checkpoint = tmp_path / "checkpoint.pt"
     source = nn.Linear(1, 1)
@@ -400,6 +523,70 @@ def test_checkpoint_subset_rejects_missing_required_modules(tmp_path: Path):
         load_checkpoint_subset(checkpoint, {"needed": nn.Linear(1, 1)}, required_modules=["needed"])
 
 
+def test_checkpoint_config_compatibility_rejects_cache_hash_mismatch(tmp_path: Path):
+    cache = tmp_path / "cache.h5"
+    projector = tmp_path / "projector.pt"
+    cache.write_bytes(b"current-cache")
+    projector.write_bytes(b"projector")
+    cfg = {
+        "data": {"cache_path": str(cache), "projector_ckpt": str(projector)},
+        "encoder": {"model_id": "encoder"},
+        "model": {"hidden_dim": 8},
+    }
+    payload = {
+        "config": {
+            "data": {"cache_path": str(cache), "projector_ckpt": str(projector)},
+            "encoder": cfg["encoder"],
+            "model": cfg["model"],
+        },
+        "artifact_hashes": {
+            "data.cache_path": hashlib.sha256(b"old-cache").hexdigest(),
+            "data.projector_ckpt": hashlib.sha256(b"projector").hexdigest(),
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="cache_path hash"):
+        assert_checkpoint_config_compatible(payload, cfg)
+
+
+def test_checkpoint_config_compatibility_rejects_data_split_provenance_mismatch(tmp_path: Path):
+    cache = tmp_path / "cache.h5"
+    projector = tmp_path / "projector.pt"
+    cache.write_bytes(b"cache")
+    projector.write_bytes(b"projector")
+    cfg = {
+        "data": {
+            "cache_path": str(cache),
+            "projector_ckpt": str(projector),
+            "labeled_fraction": 0.1,
+            "val_fraction": 0.2,
+            "test_fraction": 0.0,
+            "split_seed": 0,
+            "labeled_seed": 0,
+        },
+        "encoder": {"model_id": "encoder"},
+        "model": {"hidden_dim": 8},
+    }
+    payload = {
+        "config": {
+            "data": {**cfg["data"], "split_seed": 99},
+            "encoder": cfg["encoder"],
+            "model": cfg["model"],
+        },
+        "artifact_hashes": {
+            "data.cache_path": hashlib.sha256(b"cache").hexdigest(),
+            "data.projector_ckpt": hashlib.sha256(b"projector").hexdigest(),
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="data.split_seed"):
+        assert_checkpoint_config_compatible(
+            payload,
+            cfg,
+            data_value_keys=("labeled_fraction", "val_fraction", "test_fraction", "split_seed", "labeled_seed"),
+        )
+
+
 def test_joint_rejects_low_level_checkpoint_from_different_passive_lineage(tmp_path: Path):
     recorded_passive = tmp_path / "recorded_passive.pt"
     current_passive = tmp_path / "current_passive.pt"
@@ -410,6 +597,261 @@ def test_joint_rejects_low_level_checkpoint_from_different_passive_lineage(tmp_p
 
     with pytest.raises(RuntimeError, match="passive lineage"):
         _assert_low_level_passive_lineage(cfg, low_level_payload)
+
+
+def test_joint_rejects_low_level_checkpoint_when_passive_file_was_overwritten(tmp_path: Path):
+    passive = tmp_path / "passive.pt"
+    passive.write_bytes(b"current-passive")
+    cfg = {"training": {"passive_checkpoint": str(passive)}}
+    low_level_payload = {
+        "config": {"training": {"passive_checkpoint": str(passive)}},
+        "artifact_hashes": {"training.passive_checkpoint": hashlib.sha256(b"old-passive").hexdigest()},
+    }
+
+    with pytest.raises(RuntimeError, match="passive_checkpoint hash"):
+        _assert_low_level_passive_lineage(cfg, low_level_payload)
+
+
+def test_locked_suite_summary_freshness_rejects_missing_expected_artifacts(tmp_path: Path, monkeypatch):
+    summary_path = tmp_path / "pusht_online_eval.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "code_commit": "abc123",
+                "goal_mode": "task",
+                "hashes": {"checkpoint_sha256": "not-used"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(locked_suite, "_git_commit", lambda: "abc123")
+    monkeypatch.setattr(locked_suite, "_git_dirty", lambda: False)
+
+    assert not locked_suite._summary_matches_current(
+        summary_path,
+        expected_goal_mode="task",
+        expected_artifacts={"checkpoint": tmp_path / "missing.pt"},
+    )
+
+
+def test_locked_suite_summary_freshness_checks_hashes_and_eval_knobs(tmp_path: Path, monkeypatch):
+    checkpoint = tmp_path / "checkpoint.pt"
+    stale_checkpoint = tmp_path / "stale_checkpoint.pt"
+    checkpoint.write_bytes(b"current")
+    stale_checkpoint.write_bytes(b"stale")
+    summary_path = tmp_path / "pusht_online_eval.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "code_commit": "abc123",
+                "goal_mode": "task",
+                "subgoal_scope": "train",
+                "requested_num_eval_episodes": 100,
+                "hashes": {"checkpoint_sha256": hashlib.sha256(b"current").hexdigest()},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(locked_suite, "_git_commit", lambda: "abc123")
+    monkeypatch.setattr(locked_suite, "_git_dirty", lambda: False)
+
+    assert locked_suite._summary_matches_current(
+        summary_path,
+        expected_goal_mode="task",
+        expected_artifacts={"checkpoint": checkpoint},
+        expected_fields={"subgoal_scope": "train", "requested_num_eval_episodes": 100},
+    )
+    assert not locked_suite._summary_matches_current(
+        summary_path,
+        expected_goal_mode="task",
+        expected_artifacts={"checkpoint": stale_checkpoint},
+        expected_fields={"subgoal_scope": "train", "requested_num_eval_episodes": 100},
+    )
+    assert not locked_suite._summary_matches_current(
+        summary_path,
+        expected_goal_mode="task",
+        expected_artifacts={"checkpoint": checkpoint},
+        expected_fields={"subgoal_scope": "all", "requested_num_eval_episodes": 100},
+    )
+
+
+def test_locked_suite_summary_freshness_rejects_dirty_state_mismatch(tmp_path: Path, monkeypatch):
+    checkpoint = tmp_path / "checkpoint.pt"
+    checkpoint.write_bytes(b"current")
+    summary_path = tmp_path / "pusht_online_eval.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "code_commit": "abc123",
+                "code_dirty": True,
+                "code_status_sha256": "old-status",
+                "goal_mode": "task",
+                "hashes": {"checkpoint_sha256": hashlib.sha256(b"current").hexdigest()},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(locked_suite, "_git_commit", lambda: "abc123")
+    monkeypatch.setattr(locked_suite, "_git_dirty", lambda: True)
+    monkeypatch.setattr(locked_suite, "_git_status_sha256", lambda: "new-status")
+
+    assert not locked_suite._summary_matches_current(
+        summary_path,
+        expected_goal_mode="task",
+        expected_artifacts={"checkpoint": checkpoint},
+    )
+
+
+def test_locked_suite_checkpoint_reuse_rejects_commit_config_and_lineage_drift(tmp_path: Path, monkeypatch):
+    cache = tmp_path / "cache.h5"
+    projector = tmp_path / "projector.pt"
+    passive = tmp_path / "passive.pt"
+    low_level = tmp_path / "low_level.pt"
+    checkpoint = tmp_path / "checkpoint.pt"
+    for path, payload in [
+        (cache, b"cache"),
+        (projector, b"projector"),
+        (passive, b"passive"),
+        (low_level, b"low-level"),
+    ]:
+        path.write_bytes(payload)
+    cfg = {
+        "seed": 0,
+        "data": {"cache_path": str(cache), "projector_ckpt": str(projector)},
+        "training": {"passive_checkpoint": str(passive), "low_level_checkpoint": str(low_level)},
+    }
+    torch.save(
+        {
+            "code_commit": "abc123",
+            "code_dirty": False,
+            "config": cfg,
+            "artifact_hashes": {
+                "data.cache_path": hashlib.sha256(b"cache").hexdigest(),
+                "data.projector_ckpt": hashlib.sha256(b"projector").hexdigest(),
+                "training.passive_checkpoint": hashlib.sha256(b"passive").hexdigest(),
+                "training.low_level_checkpoint": hashlib.sha256(b"low-level").hexdigest(),
+            },
+        },
+        checkpoint,
+    )
+    monkeypatch.setattr(locked_suite, "_git_commit", lambda: "abc123")
+    monkeypatch.setattr(locked_suite, "_git_dirty", lambda: False)
+
+    assert locked_suite._checkpoint_matches_config(
+        checkpoint,
+        cfg,
+        ("data.cache_path", "data.projector_ckpt", "training.passive_checkpoint"),
+    )
+    monkeypatch.setattr(locked_suite, "_git_commit", lambda: "newer")
+    assert not locked_suite._checkpoint_matches_config(checkpoint, cfg, ("data.cache_path",))
+    monkeypatch.setattr(locked_suite, "_git_commit", lambda: "abc123")
+    drifted_cfg = {**cfg, "seed": 1}
+    assert not locked_suite._checkpoint_matches_config(checkpoint, drifted_cfg, ("data.cache_path",))
+    passive.write_bytes(b"overwritten-passive")
+    assert not locked_suite._checkpoint_matches_config(checkpoint, cfg, ("training.passive_checkpoint",))
+
+
+def test_release_sanitizer_converts_legacy_success_to_coverage_metric(tmp_path: Path, monkeypatch):
+    eval_dir = tmp_path / "locked_eval"
+    eval_dir.mkdir()
+    report_path = tmp_path / "current_best_checkpoint_comparison.csv"
+    summary_path = eval_dir / "pusht_online_eval.json"
+    records_path = eval_dir / "pusht_online_records.csv"
+    payload = {
+        "cache_path": "C:/Users/yiche/old/cache.h5",
+        "checkpoint": "C:/Users/yiche/old/joint.pt",
+        "flat": {
+            "goal_state_success_rate": 1.0,
+            "records": [
+                {
+                    "success": True,
+                    "max_coverage": 0.1,
+                    "video_path": "C:/Users/yiche/old/videos/episode_000.gif",
+                }
+            ],
+        },
+        "hierarchical": {
+            "goal_state_success_rate": 0.0,
+            "records": [
+                {
+                    "success": False,
+                    "max_coverage": 0.99,
+                    "video_path": "C:/Users/yiche/old/videos/episode_000.gif",
+                }
+            ],
+        },
+    }
+    summary_path.write_text(json.dumps(payload), encoding="utf-8")
+    records = [
+        {
+            "method": "flat",
+            "episode_idx": "0",
+            "episode_id": "2",
+            "start_index": "1",
+            "goal_index": "3",
+            "sampled_goal_gap": "2",
+            "success": "True",
+            "max_coverage": "0.1",
+            "state_dist": "5.0",
+            "final_latent_distance": "0.0",
+            "start_latent_distance": "0.0",
+            "planning_latency_sec": "0.1",
+            "final_coverage": "0.1",
+            "steps_taken": "2",
+            "skill_consistency": "0.0",
+            "video_path": "C:/Users/yiche/old/videos/episode_000.gif",
+        },
+        {
+            "method": "hierarchical",
+            "episode_idx": "0",
+            "episode_id": "2",
+            "start_index": "1",
+            "goal_index": "3",
+            "sampled_goal_gap": "2",
+            "success": "False",
+            "max_coverage": "0.99",
+            "state_dist": "1.0",
+            "final_latent_distance": "0.0",
+            "start_latent_distance": "0.0",
+            "planning_latency_sec": "0.2",
+            "final_coverage": "0.99",
+            "steps_taken": "2",
+            "skill_consistency": "0.0",
+            "video_path": "C:/Users/yiche/old/videos/episode_000.gif",
+        },
+    ]
+    summary = {
+        "flat": {
+            "unique_episodes": 1,
+            "coverage_success_rate": 0.0,
+            "goal_state_success_diagnostic_rate": 1.0,
+            "state_dist": 5.0,
+            "planning_latency_sec": 0.1,
+        },
+        "hierarchical": {
+            "unique_episodes": 1,
+            "coverage_success_rate": 1.0,
+            "goal_state_success_diagnostic_rate": 0.0,
+            "state_dist": 1.0,
+            "planning_latency_sec": 0.2,
+        },
+    }
+    monkeypatch.setattr(release_artifacts, "LOCKED_EVAL", eval_dir)
+    monkeypatch.setattr(release_artifacts, "LOCKED_REPORT", report_path)
+
+    sanitized = release_artifacts.sanitize_locked_in_place(records, summary)
+    refreshed_summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    csv_text = records_path.read_text(encoding="utf-8")
+
+    assert refreshed_summary["cache_path"] == "external/legacy_debug_cache.h5"
+    assert refreshed_summary["flat"]["success_rate"] == 0.0
+    assert refreshed_summary["hierarchical"]["success_rate"] == 1.0
+    assert refreshed_summary["flat"]["goal_state_success_scope"] == "trajectory_full_state_diagnostic"
+    assert "goal_state_success_rate" not in refreshed_summary["flat"]
+    assert sanitized[0]["coverage_success"] == "False"
+    assert sanitized[0]["goal_state_success"] == "True"
+    assert "success" not in csv_text.splitlines()[0].split(",")
+    assert "C:/Users/yiche" not in summary_path.read_text(encoding="utf-8")
 
 
 def test_joint_requires_passive_checkpoint_when_low_level_checkpoint_is_set(tmp_path: Path, monkeypatch):
@@ -631,3 +1073,48 @@ def test_eval_provenance_reports_cache_hash_check_when_available(tmp_path: Path)
     summary = _validate_eval_provenance(cfg, checkpoint_payload)
 
     assert summary["cache_projector_hash_checked"]
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"encoder_model_id": "wrong-encoder"}, "encoder_model_id"),
+        ({"encoder_state_dim": 5}, "encoder_state_dim"),
+        ({"encoder_pool_grid": 3}, "encoder_pool_grid"),
+    ],
+)
+def test_eval_provenance_rejects_cache_encoder_metadata_mismatch(
+    tmp_path: Path,
+    override: dict[str, object],
+    message: str,
+):
+    cache_path = tmp_path / "cache.h5"
+    projector = tmp_path / "projector.pt"
+    projector.write_bytes(b"projector")
+    with h5py.File(cache_path, "w") as handle:
+        handle.attrs["projector_ckpt"] = str(projector)
+        handle.attrs["projector_ckpt_sha256"] = hashlib.sha256(b"projector").hexdigest()
+        handle.attrs["encoder_model_id"] = "encoder"
+        handle.attrs["encoder_state_dim"] = 4
+        handle.attrs["encoder_pool_grid"] = 2
+        for key, value in override.items():
+            handle.attrs[key] = value
+    cfg = {
+        "data": {"cache_path": str(cache_path), "projector_ckpt": str(projector)},
+        "encoder": {"model_id": "encoder", "state_dim": 4, "pool_grid": 2},
+        "model": {"hidden_dim": 8},
+    }
+    checkpoint_payload = {
+        "config": {
+            "data": {"cache_path": str(cache_path), "projector_ckpt": str(projector)},
+            "encoder": cfg["encoder"],
+            "model": cfg["model"],
+        },
+        "artifact_hashes": {
+            "data.cache_path": hashlib.sha256(cache_path.read_bytes()).hexdigest(),
+            "data.projector_ckpt": hashlib.sha256(b"projector").hexdigest(),
+        },
+    }
+
+    with pytest.raises(RuntimeError, match=message):
+        _validate_eval_provenance(cfg, checkpoint_payload)

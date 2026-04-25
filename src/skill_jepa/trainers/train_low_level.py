@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader
 
 from skill_jepa.data import FeatureSequenceDataset
 from skill_jepa.trainers.common import (
+    DATA_PROVENANCE_KEYS,
     assert_checkpoint_config_compatible,
     build_low_level_modules,
     build_skill_modules,
@@ -58,6 +59,8 @@ def main() -> None:
     device = choose_device(cfg.get("device"))
     out_dir = ensure_dir(cfg["training"]["low_level_output_dir"])
     seq_len = max(cfg["training"]["chunk_size"] + 1, cfg["training"]["low_rollout_steps"] + 1)
+    split_seed = cfg["data"].get("split_seed", cfg["seed"])
+    labeled_seed = cfg["data"].get("labeled_seed", cfg["seed"] + 17)
 
     train_set = FeatureSequenceDataset(
         cache_path=cfg["data"]["cache_path"],
@@ -68,6 +71,8 @@ def main() -> None:
         test_fraction=cfg["data"]["test_fraction"],
         stride=cfg["data"].get("stride", 1),
         seed=cfg["seed"],
+        split_seed=split_seed,
+        labeled_seed=labeled_seed,
         use_only_labeled=True,
     )
     val_set = FeatureSequenceDataset(
@@ -79,6 +84,8 @@ def main() -> None:
         test_fraction=cfg["data"]["test_fraction"],
         stride=cfg["data"].get("val_stride", cfg["data"].get("stride", 1)),
         seed=cfg["seed"],
+        split_seed=split_seed,
+        labeled_seed=labeled_seed,
         use_only_labeled=True,
     )
     train_loader = DataLoader(
@@ -106,7 +113,12 @@ def main() -> None:
             {name: modules[name] for name in passive_names},
             strict_modules=True,
         )
-        assert_checkpoint_config_compatible(passive_payload, cfg, label="Passive checkpoint")
+        assert_checkpoint_config_compatible(
+            passive_payload,
+            cfg,
+            label="Passive checkpoint",
+            data_value_keys=DATA_PROVENANCE_KEYS,
+        )
     _freeze(modules, ["skill_idm", "skill_wm", "skill_prior", "skill_proj", "effect_proj"])
     modules_to_device(modules, device)
     optimizer = torch.optim.AdamW(

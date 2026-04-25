@@ -12,6 +12,7 @@ from pathlib import Path
 import h5py
 import matplotlib
 import pandas as pd
+import torch
 import yaml
 
 matplotlib.use("Agg")
@@ -94,6 +95,35 @@ def _git_commit() -> str | None:
     return result.stdout.strip()
 
 
+def _git_status_porcelain() -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return result.stdout
+
+
+def _git_dirty() -> bool | None:
+    status = _git_status_porcelain()
+    if status is None:
+        return None
+    return bool(status.strip())
+
+
+def _git_status_sha256() -> str | None:
+    status = _git_status_porcelain()
+    if status is None:
+        return None
+    return hashlib.sha256(status.encode("utf-8")).hexdigest()
+
+
 def _sha256_file(path: str | Path | None) -> str | None:
     if path is None:
         return None
@@ -111,6 +141,7 @@ def _summary_matches_current(
     summary_path: Path,
     expected_goal_mode: str,
     expected_artifacts: dict[str, Path] | None = None,
+    expected_fields: dict[str, object] | None = None,
 ) -> bool:
     if not summary_path.exists():
         return False
@@ -121,12 +152,21 @@ def _summary_matches_current(
         return False
     if summary.get("code_commit") != _git_commit() or summary.get("goal_mode") != expected_goal_mode:
         return False
+    if summary.get("code_dirty", False) != _git_dirty():
+        return False
+    if bool(summary.get("code_dirty", False)) and summary.get("code_status_sha256") != _git_status_sha256():
+        return False
+    for key, expected in (expected_fields or {}).items():
+        if summary.get(key) != expected:
+            return False
     if not expected_artifacts:
         return True
     hashes = summary.get("hashes", {})
     for key, path in expected_artifacts.items():
         digest = _sha256_file(path)
-        if digest is not None and hashes.get(f"{key}_sha256") != digest:
+        if digest is None:
+            return False
+        if hashes.get(f"{key}_sha256") != digest:
             return False
     return True
 
@@ -135,6 +175,35 @@ def _write_yaml(path: Path, payload: dict) -> None:
     ensure_dir(path.parent)
     with open(path, "w", encoding="utf-8") as handle:
         yaml.safe_dump(payload, handle, sort_keys=False)
+
+
+def _checkpoint_matches_config(path: Path, cfg: dict, hash_keys: tuple[str, ...]) -> bool:
+    if not path.exists():
+        return False
+    try:
+        payload = torch.load(path, map_location="cpu")
+    except Exception:
+        return False
+    if payload.get("code_commit") != _git_commit():
+        return False
+    if payload.get("code_dirty", False) != _git_dirty():
+        return False
+    if bool(payload.get("code_dirty", False)) and payload.get("code_status_sha256") != _git_status_sha256():
+        return False
+    if payload.get("config") != cfg:
+        return False
+    expected_hashes = {
+        "data.cache_path": _sha256_file(cfg.get("data", {}).get("cache_path")),
+        "data.projector_ckpt": _sha256_file(cfg.get("data", {}).get("projector_ckpt")),
+        "training.passive_checkpoint": _sha256_file(cfg.get("training", {}).get("passive_checkpoint")),
+        "training.low_level_checkpoint": _sha256_file(cfg.get("training", {}).get("low_level_checkpoint")),
+    }
+    recorded_hashes = payload.get("artifact_hashes", {})
+    for key in hash_keys:
+        digest = expected_hashes[key]
+        if digest is not None and recorded_hashes.get(key) != digest:
+            return False
+    return True
 
 
 def _base_scaled_cfg(seed: int, labeled_fraction: float, seed_root: Path) -> dict:
@@ -149,12 +218,16 @@ def _base_scaled_cfg(seed: int, labeled_fraction: float, seed_root: Path) -> dic
     cfg["data"]["labeled_fraction"] = float(labeled_fraction)
     cfg["data"]["val_fraction"] = float(VAL_FRACTION)
     cfg["data"]["test_fraction"] = 0.0
+    cfg["data"]["split_seed"] = 0
+    cfg["data"]["labeled_seed"] = 0
     cfg["training"]["passive_output_dir"] = _path_str(seed_root / "passive")
     cfg["training"]["passive_checkpoint"] = _path_str(seed_root / "passive" / "passive_best.pt")
     cfg["training"]["low_level_output_dir"] = _path_str(seed_root / "low_level")
     cfg["training"]["low_level_checkpoint"] = _path_str(seed_root / "low_level" / "low_level_best.pt")
     cfg["training"]["joint_output_dir"] = _path_str(seed_root / "joint")
     cfg["planner"]["eval_split"] = "val"
+    cfg["planner"]["eval_seed"] = 0
+    cfg["planner"]["task_goal_seed"] = 0
     cfg["planner"]["num_eval_episodes"] = 100
     return cfg
 
@@ -171,6 +244,7 @@ def _validate_cache(path: Path) -> bool:
     if not path.exists():
         return False
     try:
+        expected_cfg = load_yaml(DEBUG_CONFIG)
         with h5py.File(path, "r") as handle:
             if int(handle["ep_len"].shape[0]) != TOTAL_EPISODES or int(handle["episode_idx"].shape[0]) <= 0:
                 return False
@@ -178,7 +252,13 @@ def _validate_cache(path: Path) -> bool:
                 return False
             if _attr_text(handle.attrs.get("projector_ckpt_sha256")) != (_sha256_file(DEBUG_PROJECTOR) or ""):
                 return False
-            if _attr_text(handle.attrs.get("encoder_model_id")) is None:
+            if _attr_text(handle.attrs.get("encoder_model_id")) != str(expected_cfg["encoder"]["model_id"]):
+                return False
+            if int(handle.attrs.get("encoder_state_dim", -1)) != int(expected_cfg["encoder"]["state_dim"]):
+                return False
+            if int(handle.attrs.get("encoder_pool_grid", -1)) != int(expected_cfg["encoder"]["pool_grid"]):
+                return False
+            if int(handle.attrs.get("max_episodes", -1)) != TOTAL_EPISODES:
                 return False
             return True
     except OSError:
@@ -210,6 +290,15 @@ def run_debug_reeval(force: bool = False) -> Path:
         expected_artifacts={
             "config": DEBUG_CONFIG,
             "checkpoint": DEBUG_CHECKPOINT,
+            "projector": DEBUG_PROJECTOR,
+        },
+        expected_fields={
+            "mode": "both",
+            "subgoal_scope": "train",
+            "requested_num_eval_episodes": 100,
+            "allow_replacement": False,
+            "allow_under_sampling": True,
+            "allow_split_fallback": False,
         },
     ):
         return summary_path
@@ -277,22 +366,34 @@ def train_seed(seed: int) -> dict[str, Path]:
     _write_yaml(cfg_joint_path, cfg_joint)
     _write_yaml(cfg_low100_path, cfg_low100)
 
-    if not paths["passive"].exists():
+    if not _checkpoint_matches_config(paths["passive"], cfg_joint, hash_keys=("data.cache_path", "data.projector_ckpt")):
         _run_logged(
             [str(PYTHON), "-m", "skill_jepa.trainers.train_skill_passive", "--config", _path_str(cfg_joint_path)],
             LOG_ROOT / f"seed_{seed}_passive.log",
         )
-    if not paths["low10"].exists():
+    if not _checkpoint_matches_config(
+        paths["low10"],
+        cfg_joint,
+        hash_keys=("data.cache_path", "data.projector_ckpt", "training.passive_checkpoint"),
+    ):
         _run_logged(
             [str(PYTHON), "-m", "skill_jepa.trainers.train_low_level", "--config", _path_str(cfg_joint_path)],
             LOG_ROOT / f"seed_{seed}_low10.log",
         )
-    if not paths["joint10"].exists():
+    if not _checkpoint_matches_config(
+        paths["joint10"],
+        cfg_joint,
+        hash_keys=("data.cache_path", "data.projector_ckpt", "training.passive_checkpoint", "training.low_level_checkpoint"),
+    ):
         _run_logged(
             [str(PYTHON), "-m", "skill_jepa.trainers.train_joint", "--config", _path_str(cfg_joint_path)],
             LOG_ROOT / f"seed_{seed}_joint10.log",
         )
-    if not paths["low100"].exists():
+    if not _checkpoint_matches_config(
+        paths["low100"],
+        cfg_low100,
+        hash_keys=("data.cache_path", "data.projector_ckpt", "training.passive_checkpoint"),
+    ):
         _run_logged(
             [str(PYTHON), "-m", "skill_jepa.trainers.train_low_level", "--config", _path_str(cfg_low100_path)],
             LOG_ROOT / f"seed_{seed}_low100.log",
@@ -326,6 +427,16 @@ def evaluate_seed(seed: int, artifacts: dict[str, Path]) -> tuple[list[dict], li
                     "checkpoint": checkpoint_path,
                     "cache": CACHE_ROOT / "pusht_vjepa2_cache_13024ep.h5",
                     "projector": DEBUG_PROJECTOR,
+                },
+                expected_fields={
+                    "mode": mode,
+                    "requested_eval_split": "val",
+                    "subgoal_scope": "train",
+                    "goal_gap": goal_gap,
+                    "requested_num_eval_episodes": num_eval,
+                    "allow_replacement": False,
+                    "allow_under_sampling": False,
+                    "allow_split_fallback": False,
                 },
             ):
                 command = [

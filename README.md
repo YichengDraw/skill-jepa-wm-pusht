@@ -38,6 +38,7 @@ This is a focused experimental snapshot, not a full mirror of the upstream JEPA-
 ## Installation
 
 Python `3.10` or `3.11` is the target version.
+The end-to-end cache, training, evaluation, and report-refresh commands assume a source checkout. Wheel builds are used as import/install checks for the Python modules and CLI packages; large data, generated caches, checkpoints, and release artifacts live in the repository layout.
 
 ```bash
 git clone https://github.com/YichengDraw/skill-jepa-wm-pusht.git

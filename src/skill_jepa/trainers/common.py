@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import subprocess
 from pathlib import Path
 from typing import Dict
 
@@ -10,6 +11,10 @@ import torch.nn as nn
 from skill_jepa.data import cache_metadata
 from skill_jepa.modules import ActionChunkEncoder, LowLevelWM, SkillIDM, SkillPrior, SkillWorldModel
 from skill_jepa.utils import ensure_dir
+
+
+ROOT = Path(__file__).resolve().parents[3]
+DATA_PROVENANCE_KEYS = ("labeled_fraction", "val_fraction", "test_fraction", "split_seed", "labeled_seed")
 
 
 def sha256_file(path: str | Path | None) -> str | None:
@@ -51,12 +56,57 @@ def artifact_hashes_for_config(config: Dict) -> Dict[str, str]:
     return hashes
 
 
+def git_commit() -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return result.stdout.strip()
+
+
+def git_status_porcelain() -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return result.stdout
+
+
+def git_dirty() -> bool | None:
+    status = git_status_porcelain()
+    if status is None:
+        return None
+    return bool(status.strip())
+
+
+def git_status_sha256() -> str | None:
+    status = git_status_porcelain()
+    if status is None:
+        return None
+    return hashlib.sha256(status.encode("utf-8")).hexdigest()
+
+
 def assert_checkpoint_config_compatible(
     checkpoint_payload: Dict,
     runtime_config: Dict,
     label: str = "Checkpoint",
     sections: tuple[str, ...] = ("encoder", "model"),
     data_keys: tuple[str, ...] = ("cache_path", "projector_ckpt"),
+    data_value_keys: tuple[str, ...] = (),
 ) -> None:
     checkpoint_config = checkpoint_payload.get("config", {})
     if not checkpoint_config:
@@ -66,6 +116,12 @@ def assert_checkpoint_config_compatible(
             raise RuntimeError(f"{label} {section} config does not match the runtime config")
     checkpoint_data = checkpoint_config.get("data", {})
     runtime_data = runtime_config.get("data", {})
+    for key in data_value_keys:
+        if checkpoint_data.get(key) != runtime_data.get(key):
+            raise RuntimeError(
+                f"{label} data.{key} does not match the runtime config: "
+                f"recorded={checkpoint_data.get(key)}, current={runtime_data.get(key)}"
+            )
     checkpoint_hashes = checkpoint_payload.get("artifact_hashes", {})
     runtime_hashes = artifact_hashes_for_config(runtime_config)
     for key in data_keys:
@@ -166,6 +222,9 @@ def save_checkpoint(
     payload = {
         "step": step,
         "config": config,
+        "code_commit": git_commit(),
+        "code_dirty": git_dirty(),
+        "code_status_sha256": git_status_sha256(),
         "artifact_hashes": artifact_hashes_for_config(config),
         "metrics": metrics or {},
         "modules": {name: module.state_dict() for name, module in modules.items()},

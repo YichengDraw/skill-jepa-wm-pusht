@@ -42,8 +42,8 @@
 
 \begin{center}
 {\LARGE\bfseries \textcolor{ReportBlue}{Skill-JEPA-WM Implementation and Experiment Report}}\\[0.5em]
-{\large Push-T Debug Track in \texttt{jepa-wms}}\\[0.4em]
-{\normalsize Branch: \texttt{skill-jepa-wm}}
+{\large Push-T Debug Track, public repository snapshot}\\[0.4em]
+{\normalsize Historical diagnostic artifact}
 \end{center}
 
 \vspace{0.75em}
@@ -52,7 +52,7 @@
 \fcolorbox{ReportLine}{ReportGray}{
 \begin{minipage}{0.97\linewidth}
 \textbf{Executive Summary.}
-I implemented the Skill-JEPA-WM pipeline inside \texttt{jepa-wms}, corrected several evaluation inconsistencies, and reran the debug experiments on the local RTX 4070 8GB.
+I implemented the Skill-JEPA-WM Push-T pipeline, corrected several evaluation inconsistencies, and reran the debug experiments on the local RTX 4070 8GB.
 This report is now historical: its headline \textbf{25\% success} value is a sampled-trajectory goal-state diagnostic, not standard Push-T coverage success.
 The later release re-score found that these debug artifacts do not support a Push-T task-success claim; use them only for implementation and trajectory-reaching context.
 \end{minipage}
@@ -79,7 +79,7 @@ The concrete success criteria from the design spec were:
 
 \section*{2. What Was Implemented}
 
-The implementation added a new \texttt{skill\_jepa/} package and the experiment plumbing required to train and evaluate it inside \texttt{jepa-wms}.
+The implementation added a new \texttt{skill\_jepa/} package and the experiment plumbing required to train and evaluate the Push-T branch.
 The main work items were:
 
 \begin{itemize}

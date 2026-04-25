@@ -41,7 +41,7 @@
 
 \begin{center}
 {\LARGE\bfseries \textcolor{ReportBlue}{Skill-JEPA-WM Locked Protocol Progress Report}}\\[0.5em]
-{\large Push-T Locked Suite Status in \texttt{jepa-wms}}\\[0.4em]
+{\large Push-T Locked Suite Status, public repository snapshot}\\[0.4em]
 {\normalsize Scope: reevaluation and incompleteness closure before scaled pilot}
 \end{center}
 
@@ -86,7 +86,8 @@ The same request also fixed the experimental boundary:
 
 \subsection*{2.1 Current Best Checkpoint Reevaluation}
 
-I reran the current best Push-T debug checkpoint on \textbf{100 evaluation episodes} under the locked online evaluator and compared hierarchical vs.\ flat planning from the same checkpoint.
+I reran the current best Push-T debug checkpoint on \textbf{100 sampled evaluation pairs} under the locked online evaluator and compared hierarchical vs.\ flat planning from the same checkpoint.
+The release re-score later showed that these sampled pairs came from \textbf{one unique episode}, so this artifact is a historical trajectory diagnostic rather than broad held-out task evidence.
 
 \begin{center}
 \begin{tabular}{lrrrr}
@@ -104,6 +105,7 @@ Additional comparison summary:
 
 \begin{itemize}
 \item hierarchical better-than-flat rate by sampled-state distance: \textbf{0.57},
+\item unique episode count after release re-score: \textbf{1},
 \item representative rollout GIFs were saved for both planners,
 \item per-episode records were exported to CSV.
 \end{itemize}

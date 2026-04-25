@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader
 
 from skill_jepa.data import FeatureSequenceDataset
 from skill_jepa.trainers.common import (
+    DATA_PROVENANCE_KEYS,
     assert_checkpoint_config_compatible,
     build_all_modules,
     load_checkpoint,
@@ -17,6 +18,7 @@ from skill_jepa.trainers.common import (
     parameters_for,
     save_checkpoint,
     same_file_identity,
+    sha256_file,
 )
 from skill_jepa.trainers.objectives import compute_low_level_losses, compute_passive_losses
 from skill_jepa.utils import append_jsonl, choose_device, detach_metrics, ensure_dir, load_yaml, seed_everything, to_device
@@ -43,6 +45,10 @@ def _assert_low_level_passive_lineage(cfg: dict, low_level_payload: dict) -> Non
             "Low-level checkpoint passive lineage does not match the requested passive_checkpoint: "
             f"recorded={recorded}, current={expected}"
         )
+    recorded_hash = low_level_payload.get("artifact_hashes", {}).get("training.passive_checkpoint")
+    current_hash = sha256_file(expected)
+    if recorded_hash and current_hash and recorded_hash != current_hash:
+        raise RuntimeError("Low-level checkpoint passive_checkpoint hash does not match the requested passive_checkpoint")
 
 
 def evaluate(loader, modules, cfg, device, step):
@@ -78,6 +84,8 @@ def main() -> None:
     device = choose_device(cfg.get("device"))
     out_dir = ensure_dir(cfg["training"]["joint_output_dir"])
     seq_len = cfg["training"]["chunk_size"] * cfg["training"]["rollout_chunks"] + 1
+    split_seed = cfg["data"].get("split_seed", cfg["seed"])
+    labeled_seed = cfg["data"].get("labeled_seed", cfg["seed"] + 17)
 
     train_set = FeatureSequenceDataset(
         cache_path=cfg["data"]["cache_path"],
@@ -88,6 +96,8 @@ def main() -> None:
         test_fraction=cfg["data"]["test_fraction"],
         stride=cfg["data"].get("stride", 1),
         seed=cfg["seed"],
+        split_seed=split_seed,
+        labeled_seed=labeled_seed,
     )
     val_set = FeatureSequenceDataset(
         cache_path=cfg["data"]["cache_path"],
@@ -98,6 +108,8 @@ def main() -> None:
         test_fraction=cfg["data"]["test_fraction"],
         stride=cfg["data"].get("val_stride", cfg["data"].get("stride", 1)),
         seed=cfg["seed"],
+        split_seed=split_seed,
+        labeled_seed=labeled_seed,
     )
     train_loader = DataLoader(
         train_set,
@@ -123,7 +135,12 @@ def main() -> None:
             {name: modules[name] for name in passive_names},
             strict_modules=True,
         )
-        assert_checkpoint_config_compatible(passive_payload, cfg, label="Passive checkpoint")
+        assert_checkpoint_config_compatible(
+            passive_payload,
+            cfg,
+            label="Passive checkpoint",
+            data_value_keys=DATA_PROVENANCE_KEYS,
+        )
     if cfg["training"].get("low_level_checkpoint"):
         if not cfg["training"].get("passive_checkpoint"):
             raise RuntimeError("Joint training with a low_level_checkpoint requires an explicit passive_checkpoint")
@@ -132,7 +149,12 @@ def main() -> None:
             modules,
             required_modules=["action_chunk_encoder", "low_level_wm"],
         )
-        assert_checkpoint_config_compatible(low_level_payload, cfg, label="Low-level checkpoint")
+        assert_checkpoint_config_compatible(
+            low_level_payload,
+            cfg,
+            label="Low-level checkpoint",
+            data_value_keys=DATA_PROVENANCE_KEYS,
+        )
         _assert_low_level_passive_lineage(cfg, low_level_payload)
     modules_to_device(modules, device)
     optimizer = torch.optim.AdamW(

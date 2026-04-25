@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.gif binary
+*.h5 binary
+*.pdf binary
+*.png binary
+*.pt binary

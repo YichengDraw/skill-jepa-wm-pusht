@@ -34,6 +34,7 @@ ROOT = Path(__file__).resolve().parents[3]
 @dataclass
 class OnlineEvalRecord:
     episode_idx: int
+    eval_seed: int
     episode_id: int
     start_index: int
     goal_index: int
@@ -99,6 +100,35 @@ def _git_commit() -> str | None:
     except (OSError, subprocess.CalledProcessError):
         return None
     return result.stdout.strip()
+
+
+def _git_status_porcelain() -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return result.stdout
+
+
+def _git_dirty() -> bool | None:
+    status = _git_status_porcelain()
+    if status is None:
+        return None
+    return bool(status.strip())
+
+
+def _git_status_sha256() -> str | None:
+    status = _git_status_porcelain()
+    if status is None:
+        return None
+    return hashlib.sha256(status.encode("utf-8")).hexdigest()
 
 
 def _portable_path(path: str | Path | None) -> str | None:
@@ -185,11 +215,12 @@ def _split_step_indices(cache_path: str, split: str, cfg: dict) -> np.ndarray:
     with h5py.File(cache_path, "r") as handle:
         ep_len = handle["ep_len"][:]
         ep_offset = handle["ep_offset"][:]
+    split_seed = int(cfg.get("data", {}).get("split_seed", cfg["seed"]))
     split_ids = split_episode_ids(
         len(ep_len),
         cfg["data"]["val_fraction"],
         cfg["data"]["test_fraction"],
-        int(cfg["seed"]),
+        split_seed,
     )[split]
     indices = []
     for episode_id in split_ids.tolist():
@@ -378,6 +409,7 @@ def _run_episode(
     cache_path: str,
     device: torch.device,
     episode_idx: int,
+    eval_seed: int,
     start_index: int,
     goal_index: int,
     episode_id: int,
@@ -440,6 +472,7 @@ def _run_episode(
         _save_rollout_video(video_path, frames, video_fps)
     return OnlineEvalRecord(
         episode_idx=episode_idx,
+        eval_seed=eval_seed,
         episode_id=episode_id,
         start_index=start_index,
         goal_index=goal_index,
@@ -477,6 +510,7 @@ def _write_records_csv(path: Path, records_by_method: dict[str, list[dict]]) -> 
     fieldnames = [
         "method",
         "episode_idx",
+        "eval_seed",
         "episode_id",
         "start_index",
         "goal_index",
@@ -553,6 +587,56 @@ def _same_record_rate(
     return float(np.mean(wins))
 
 
+def _summarize_method_records(method_records: list[dict], goal_state_scope: str) -> dict:
+    goal_state_success_rate = (
+        float(np.mean([record["goal_state_success"] for record in method_records])) if method_records else 0.0
+    )
+    return {
+        "final_latent_distance": float(np.mean([record["final_latent_distance"] for record in method_records]))
+        if method_records
+        else 0.0,
+        "planning_latency_sec": float(np.mean([record["planning_latency_sec"] for record in method_records]))
+        if method_records
+        else 0.0,
+        "records": method_records,
+        "skill_consistency": float(np.mean([record["skill_consistency"] for record in method_records]))
+        if method_records
+        else 0.0,
+        "state_dist": float(np.mean([record["state_dist"] for record in method_records])) if method_records else 0.0,
+        "success_rate": float(np.mean([record["coverage_success"] for record in method_records]))
+        if method_records
+        else 0.0,
+        "coverage_success_rate": float(np.mean([record["coverage_success"] for record in method_records]))
+        if method_records
+        else 0.0,
+        "goal_state_success_diagnostic_rate": goal_state_success_rate,
+        "goal_state_success_is_task_metric": False,
+        "goal_state_success_scope": goal_state_scope,
+        "unique_episode_count": len({record["episode_id"] for record in method_records}),
+    }
+
+
+def _task_success_claim_supported(
+    goal_mode: str,
+    actual_split: str,
+    requested_count: int,
+    sampled_count: int,
+    unique_episode_count: int,
+    allow_replacement: bool,
+    allow_under_sampling: bool,
+    allow_split_fallback: bool,
+) -> bool:
+    return bool(
+        goal_mode == "task"
+        and actual_split in {"val", "test"}
+        and int(sampled_count) == int(requested_count)
+        and int(unique_episode_count) == int(requested_count)
+        and not allow_replacement
+        and not allow_under_sampling
+        and not allow_split_fallback
+    )
+
+
 def _normalize_path_text(path_like: str | os.PathLike) -> str:
     return str(Path(str(path_like)).expanduser().resolve(strict=False)).replace("\\", "/")
 
@@ -583,6 +667,12 @@ def _attr_text(value: object) -> str | None:
     if isinstance(value, bytes):
         return value.decode("utf-8")
     return str(value)
+
+
+def _attr_int(value: object) -> int | None:
+    if value is None:
+        return None
+    return int(value)
 
 
 def _validate_eval_provenance(cfg: dict, checkpoint_payload: dict) -> dict[str, object]:
@@ -622,7 +712,23 @@ def _validate_eval_provenance(cfg: dict, checkpoint_payload: dict) -> dict[str, 
         cache_projector = _attr_text(handle.attrs.get("projector_ckpt"))
         cache_projector_hash = _attr_text(handle.attrs.get("projector_ckpt_sha256"))
         cache_source_hash = _attr_text(handle.attrs.get("source_h5_sha256"))
+        cache_encoder_model_id = _attr_text(handle.attrs.get("encoder_model_id"))
+        cache_encoder_state_dim = _attr_int(handle.attrs.get("encoder_state_dim"))
+        cache_encoder_pool_grid = _attr_int(handle.attrs.get("encoder_pool_grid"))
     _assert_same_file_identity("Cache projector_ckpt", cache_projector, cfg["data"].get("projector_ckpt"))
+    encoder_cfg = cfg.get("encoder", {})
+    if cache_encoder_model_id is None:
+        warnings.append("Cache does not record encoder_model_id; encoder/cache compatibility is partially unavailable")
+    elif cache_encoder_model_id != str(encoder_cfg.get("model_id")):
+        raise RuntimeError("Cache encoder_model_id does not match the runtime encoder config")
+    if cache_encoder_state_dim is None:
+        warnings.append("Cache does not record encoder_state_dim; encoder/cache compatibility is partially unavailable")
+    elif cache_encoder_state_dim != int(encoder_cfg.get("state_dim")):
+        raise RuntimeError("Cache encoder_state_dim does not match the runtime encoder config")
+    if cache_encoder_pool_grid is None:
+        warnings.append("Cache does not record encoder_pool_grid; encoder/cache compatibility is partially unavailable")
+    elif cache_encoder_pool_grid != int(encoder_cfg.get("pool_grid")):
+        raise RuntimeError("Cache encoder_pool_grid does not match the runtime encoder config")
     cache_projector_hash_checked = False
     current_projector_hash = _sha256_file(cfg["data"].get("projector_ckpt"))
     if cache_projector_hash and current_projector_hash:
@@ -710,18 +816,21 @@ def main() -> None:
     meta = cache_metadata(cfg["data"]["cache_path"])
     planners = _build_planners(cfg, modules, meta, device, subgoal_scope=args.subgoal_scope)
     eval_split = args.eval_split or planner_cfg.get("eval_split", "test")
+    split_seed = int(cfg["data"].get("split_seed", cfg["seed"]))
+    eval_seed = int(planner_cfg.get("eval_seed", cfg["seed"]))
+    task_goal_seed = int(planner_cfg.get("task_goal_seed", eval_seed + 100003))
     sampler = EpisodeGoalSampler(
         cache_path=cfg["data"]["cache_path"],
         split=eval_split,
         val_fraction=cfg["data"]["val_fraction"],
         test_fraction=cfg["data"]["test_fraction"],
-        seed=cfg["seed"],
+        seed=split_seed,
         goal_gap=planner_cfg["goal_gap"],
         fallback_empty_split=bool(args.allow_split_fallback),
     )
     goal_pairs = sampler.sample(
         planner_cfg["num_eval_episodes"],
-        seed=cfg["seed"],
+        seed=eval_seed,
         max_goal_gap=planner_cfg.get("max_episode_steps"),
         allow_replacement=args.allow_replacement,
         allow_under_sampling=args.allow_under_sampling,
@@ -734,7 +843,6 @@ def main() -> None:
     coverage_threshold = float(getattr(env, "success_threshold", 0.95))
     goal_pool_summary: dict[str, object] = {
         "goal_mode": args.goal_mode,
-        "task_success_claim_supported": bool(args.goal_mode == "task"),
     }
     if args.goal_mode == "task":
         task_goal_indices, task_goal_coverages = _select_task_goal_indices(
@@ -742,7 +850,7 @@ def main() -> None:
             env=env,
             val_fraction=cfg["data"]["val_fraction"],
             test_fraction=cfg["data"]["test_fraction"],
-            seed=int(cfg["seed"]),
+            seed=split_seed,
             coverage_threshold=coverage_threshold,
             tail_steps=int(args.task_goal_tail_steps),
         )
@@ -750,7 +858,7 @@ def main() -> None:
             goal_pairs,
             cache_path=cfg["data"]["cache_path"],
             goal_indices=task_goal_indices,
-            seed=int(cfg["seed"]) + 100003,
+            seed=task_goal_seed,
         )
         goal_pool_summary.update(
             {
@@ -779,9 +887,9 @@ def main() -> None:
     execute_actions_per_plan = int(planner_cfg.get("execute_actions_per_plan", 1))
     records_by_method: dict[str, list[dict]] = {}
     goal_state_scope = (
-        "trajectory_target_diagnostic"
+        "trajectory_full_state_diagnostic"
         if args.goal_mode == "trajectory"
-        else "sampled_train_task_goal_pose_diagnostic"
+        else "sampled_train_task_goal_full_state_diagnostic"
     )
     summary: dict[str, object] = {
         "cache_path": _portable_path(cfg["data"]["cache_path"]),
@@ -799,6 +907,8 @@ def main() -> None:
             "projector_sha256": _sha256_file(cfg["data"]["projector_ckpt"]),
         },
         "code_commit": _git_commit(),
+        "code_dirty": _git_dirty(),
+        "code_status_sha256": _git_status_sha256(),
         "coverage_threshold": coverage_threshold,
         **goal_pool_summary,
         **split_summary,
@@ -808,6 +918,20 @@ def main() -> None:
         "mode": args.mode,
         "num_eval_episodes": len(goal_pairs),
         "requested_num_eval_episodes": int(planner_cfg["num_eval_episodes"]),
+        "split_seed": split_seed,
+        "eval_seed": eval_seed,
+        "task_goal_seed": task_goal_seed if args.goal_mode == "task" else None,
+        "success_semantics": "success and success_rate are Push-T coverage_success; goal_state_success is diagnostic only",
+        "task_success_claim_supported": _task_success_claim_supported(
+            goal_mode=args.goal_mode,
+            actual_split=str(split_summary["eval_split"]),
+            requested_count=int(planner_cfg["num_eval_episodes"]),
+            sampled_count=len(goal_pairs),
+            unique_episode_count=unique_episode_count,
+            allow_replacement=bool(args.allow_replacement),
+            allow_under_sampling=bool(args.allow_under_sampling),
+            allow_split_fallback=bool(args.allow_split_fallback),
+        ),
         "unique_episode_count": unique_episode_count,
         "allow_replacement": bool(args.allow_replacement),
         "allow_under_sampling": bool(args.allow_under_sampling),
@@ -820,7 +944,8 @@ def main() -> None:
         for method in methods:
             method_records = []
             for episode_idx, pair in enumerate(goal_pairs):
-                _set_eval_seed(int(cfg["seed"]) + episode_idx, env=env)
+                episode_seed = int(eval_seed) + episode_idx
+                _set_eval_seed(episode_seed, env=env)
                 video_path = None
                 if args.save_videos and episode_idx < int(args.video_limit):
                     video_path = Path(out_dir) / "videos" / method / f"episode_{episode_idx:03d}.gif"
@@ -833,6 +958,7 @@ def main() -> None:
                     cache_path=cfg["data"]["cache_path"],
                     device=device,
                     episode_idx=episode_idx,
+                    eval_seed=episode_seed,
                     start_index=int(pair["start_index"]),
                     goal_index=int(pair["goal_index"]),
                     episode_id=int(pair["episode_id"]),
@@ -849,35 +975,7 @@ def main() -> None:
                 )
                 method_records.append(asdict(record))
             records_by_method[method] = method_records
-            goal_state_success_rate = (
-                float(np.mean([record["goal_state_success"] for record in method_records])) if method_records else 0.0
-            )
-            method_summary = {
-                "final_latent_distance": float(np.mean([record["final_latent_distance"] for record in method_records]))
-                if method_records
-                else 0.0,
-                "planning_latency_sec": float(np.mean([record["planning_latency_sec"] for record in method_records]))
-                if method_records
-                else 0.0,
-                "records": method_records,
-                "skill_consistency": float(np.mean([record["skill_consistency"] for record in method_records]))
-                if method_records
-                else 0.0,
-                "state_dist": float(np.mean([record["state_dist"] for record in method_records])) if method_records else 0.0,
-                "success_rate": float(np.mean([record["coverage_success"] for record in method_records]))
-                if method_records
-                else 0.0,
-                "coverage_success_rate": float(np.mean([record["coverage_success"] for record in method_records]))
-                if method_records
-                else 0.0,
-                "goal_state_success_diagnostic_rate": goal_state_success_rate,
-                "goal_state_success_is_task_metric": False,
-                "goal_state_success_scope": goal_state_scope,
-                "unique_episode_count": len({record["episode_id"] for record in method_records}),
-            }
-            if args.goal_mode == "trajectory":
-                method_summary["goal_state_success_rate"] = goal_state_success_rate
-            summary[method] = method_summary
+            summary[method] = _summarize_method_records(method_records, goal_state_scope)
         if "hierarchical" in summary and "flat" in summary:
             summary["hierarchical_coverage_better_rate"] = _same_record_rate(
                 records_by_method, "flat", "hierarchical", "coverage_success", True
@@ -885,10 +983,6 @@ def main() -> None:
             summary["hierarchical_goal_state_diagnostic_better_rate"] = _same_record_rate(
                 records_by_method, "flat", "hierarchical", "goal_state_success", True
             )
-            if args.goal_mode == "trajectory":
-                summary["hierarchical_goal_state_better_rate"] = summary[
-                    "hierarchical_goal_state_diagnostic_better_rate"
-                ]
             summary["hierarchical_sampled_state_better_rate"] = _same_record_rate(
                 records_by_method, "flat", "hierarchical", "state_dist", False
             )
@@ -899,10 +993,6 @@ def main() -> None:
             summary["hierarchical_vs_random_goal_state_diagnostic_better_rate"] = _same_record_rate(
                 records_by_method, "random_hierarchical", "hierarchical", "goal_state_success", True
             )
-            if args.goal_mode == "trajectory":
-                summary["hierarchical_vs_random_goal_state_better_rate"] = summary[
-                    "hierarchical_vs_random_goal_state_diagnostic_better_rate"
-                ]
             summary["hierarchical_vs_random_sampled_state_better_rate"] = _same_record_rate(
                 records_by_method, "random_hierarchical", "hierarchical", "state_dist", False
             )

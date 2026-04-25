@@ -46,7 +46,7 @@ def split_episode_ids(num_episodes: int, val_fraction: float, test_fraction: flo
 
 
 def _labeled_episode_ids(train_ids: np.ndarray, labeled_fraction: float, seed: int) -> np.ndarray:
-    rng = np.random.default_rng(seed + 17)
+    rng = np.random.default_rng(seed)
     ids = train_ids.copy()
     rng.shuffle(ids)
     n_labeled = max(1, int(round(len(ids) * labeled_fraction)))
@@ -72,6 +72,8 @@ class FeatureSequenceDataset(Dataset):
         test_fraction: float = 0.05,
         stride: int = 1,
         seed: int = 0,
+        split_seed: int | None = None,
+        labeled_seed: int | None = None,
         use_only_labeled: bool | None = None,
     ) -> None:
         self.cache_path = str(cache_path)
@@ -82,10 +84,12 @@ class FeatureSequenceDataset(Dataset):
         with h5py.File(self.cache_path, "r") as handle:
             self.ep_offset = handle["ep_offset"][:]
             self.ep_len = handle["ep_len"][:]
-        splits = split_episode_ids(len(self.ep_len), val_fraction, test_fraction, seed)
+        split_seed = seed if split_seed is None else int(split_seed)
+        labeled_seed = seed + 17 if labeled_seed is None else int(labeled_seed)
+        splits = split_episode_ids(len(self.ep_len), val_fraction, test_fraction, split_seed)
         train_ids = splits["train"]
         self.split_ids = splits[split]
-        self.labeled_ids = set(_labeled_episode_ids(train_ids, labeled_fraction, seed).tolist())
+        self.labeled_ids = set(_labeled_episode_ids(train_ids, labeled_fraction, labeled_seed).tolist())
         self.samples: List[SampleIndex] = []
         for episode_id in self.split_ids.tolist():
             ep_len = int(self.ep_len[episode_id])
@@ -210,7 +214,7 @@ class EpisodeGoalSampler:
             chosen_eps = rng.choice(
                 valid_episode_ids,
                 size=sample_size,
-                replace=bool(allow_replacement and len(valid_episode_ids) < sample_size),
+                replace=bool(allow_replacement),
             )
             for episode_id in chosen_eps.tolist():
                 ep_len = int(self.ep_len[episode_id])
