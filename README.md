@@ -74,7 +74,7 @@ The committed debug configs assume:
 If your full file lives elsewhere, set:
 
 ```powershell
-$env:PUSHT_FULL_RAW_H5="D:\path\to\pusht_expert_train.h5"
+$env:PUSHT_FULL_RAW_H5="<path-to-pusht_expert_train.h5>"
 ```
 
 ## Main Files
@@ -110,8 +110,11 @@ python -m skill_jepa.analysis.eval_pusht_online ^
   --config configs/exp/pusht_debug.yaml ^
   --checkpoint outputs/skill_jepa/pusht_debug/joint/joint_best.pt ^
   --output outputs/skill_jepa/pusht_debug/planner_online_joint ^
-  --mode both
+  --mode both ^
+  --goal-mode trajectory
 ```
+
+`--goal-mode task` is the default for standard Push-T evaluation. It requires train-split cache states that already reach the Push-T coverage threshold, then uses those states as task-aligned goal latents. The bundled debug cache does not contain such high-coverage goal states, so its reruns must stay in explicit `trajectory` diagnostic mode.
 
 ### 4. Run the locked suite helper
 
@@ -145,7 +148,7 @@ From `artifacts/pusht_debug/EXPERIMENT_STATUS.md`:
 
 These debug numbers are historical goal-state-reaching diagnostics. They are not standard Push-T coverage-success evidence.
 
-### Coverage-first reliability re-score
+### Trajectory-goal reliability re-score
 
 From `artifacts/release/skill_jepa_wm_reliability_report.md`:
 
@@ -159,13 +162,13 @@ Interpretation:
 - The old `success_rate` column measured pose-to-sampled-goal success, not standard Push-T coverage success.
 - The legacy locked artifact has repeated sampled pairs from one unique episode.
 - Hierarchy improves sampled-state distance and planning latency in that artifact.
-- The artifact does not support a standard Push-T task-success claim.
+- The artifact uses trajectory-goal planning targets. It does not support a standard Push-T task-success claim.
 
 ### Phase A fresh current-checkpoint eval
 
-The corrected evaluator was rerun against the available sibling debug cache/checkpoint with replacement disabled, train-split subgoal lookup, strict checkpoint loading, env seeding, portable paths, and artifact hashes. The debug cache yields one unique test episode, so this is a reliability smoke rerun rather than a scaled method verdict.
+The corrected evaluator was rerun against the available sibling debug cache/checkpoint with replacement disabled, train-split subgoal lookup, strict checkpoint/cache/projector checks, env seeding, portable paths, and artifact hashes. The debug cache yields one unique test episode and no train-split states above the task coverage threshold, so this is an explicit trajectory-goal smoke rerun rather than a scaled Push-T task verdict.
 
-| Method | Coverage success | Goal-state success | Mean sampled-state distance | Mean planning latency |
+| Method | Fixed-task coverage diagnostic | Goal-state success | Mean sampled-state distance | Mean planning latency |
 |---|---:|---:|---:|---:|
 | Hierarchical | 0.00 | 0.00 | 464.56 | 0.129 s |
 | Flat | 0.00 | 0.00 | 321.15 | 0.292 s |

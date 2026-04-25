@@ -9,7 +9,7 @@ import h5py
 import numpy as np
 import torch
 
-from skill_jepa.data import EpisodeGoalSampler, cache_metadata
+from skill_jepa.data import EpisodeGoalSampler, cache_metadata, split_episode_ids
 from skill_jepa.planning import HighLevelCEMPlanner, HierarchicalPlanner, LowLevelCEMPlanner
 from skill_jepa.trainers.common import build_all_modules, load_checkpoint, modules_to_device
 from skill_jepa.utils import dump_json, ensure_dir, load_yaml, seed_everything
@@ -22,10 +22,19 @@ class CacheStep:
 
 
 class NearestSubgoalResolver:
-    def __init__(self, cache_path: str, device: torch.device, chunk_size: int = 4096) -> None:
+    def __init__(
+        self,
+        cache_path: str,
+        device: torch.device,
+        chunk_size: int = 4096,
+        allowed_indices: np.ndarray | None = None,
+    ) -> None:
         self.cache_path = cache_path
         self.device = device
         self.chunk_size = chunk_size
+        self.allowed_indices = None if allowed_indices is None else np.asarray(allowed_indices, dtype=np.int64)
+        if self.allowed_indices is not None and len(self.allowed_indices) == 0:
+            raise ValueError("NearestSubgoalResolver received an empty allowed index set")
 
     @torch.no_grad()
     def __call__(self, target_z: torch.Tensor) -> torch.Tensor:
@@ -34,16 +43,39 @@ class NearestSubgoalResolver:
         with h5py.File(self.cache_path, "r") as handle:
             z_ds = handle["z"]
             s_ds = handle["s"]
-            for start in range(0, z_ds.shape[0], self.chunk_size):
-                end = min(start + self.chunk_size, z_ds.shape[0])
-                z_chunk = torch.from_numpy(z_ds[start:end]).float().to(self.device)
+            indices = self.allowed_indices
+            if indices is None:
+                indices = np.arange(z_ds.shape[0], dtype=np.int64)
+            for start in range(0, len(indices), self.chunk_size):
+                chunk_indices = indices[start : start + self.chunk_size]
+                z_chunk = torch.from_numpy(z_ds[chunk_indices]).float().to(self.device)
                 distances = (z_chunk - target_z.unsqueeze(0)).pow(2).mean(dim=-1)
                 chunk_idx = int(torch.argmin(distances).item())
                 chunk_cost = float(distances[chunk_idx].item())
                 if best_cost is None or chunk_cost < best_cost:
                     best_cost = chunk_cost
-                    best_s = torch.from_numpy(s_ds[start + chunk_idx]).float().to(self.device)
+                    best_s = torch.from_numpy(s_ds[int(chunk_indices[chunk_idx])]).float().to(self.device)
         return best_s
+
+
+def _split_step_indices(cache_path: str, split: str, cfg: dict) -> np.ndarray:
+    with h5py.File(cache_path, "r") as handle:
+        ep_len = handle["ep_len"][:]
+        ep_offset = handle["ep_offset"][:]
+    split_ids = split_episode_ids(
+        len(ep_len),
+        cfg["data"]["val_fraction"],
+        cfg["data"]["test_fraction"],
+        int(cfg["seed"]),
+    )[split]
+    indices = []
+    for episode_id in split_ids.tolist():
+        offset = int(ep_offset[episode_id])
+        length = int(ep_len[episode_id])
+        indices.append(np.arange(offset, offset + length, dtype=np.int64))
+    if not indices:
+        return np.asarray([], dtype=np.int64)
+    return np.concatenate(indices)
 
 
 def _load_cache_step(cache_path: str, start_index: int, goal_index: int, device: torch.device) -> tuple[CacheStep, CacheStep]:
@@ -121,7 +153,7 @@ def main() -> None:
     device = torch.device(cfg.get("device", "cuda" if torch.cuda.is_available() else "cpu"))
 
     modules = build_all_modules(cfg, cfg["data"]["cache_path"])
-    load_checkpoint(args.checkpoint, modules)
+    load_checkpoint(args.checkpoint, modules, strict_modules=True)
     modules_to_device(modules, device)
     for module in modules.values():
         module.eval()
@@ -132,7 +164,8 @@ def main() -> None:
     action_std = torch.from_numpy(meta["action_std"]).float().to(device) if "action_std" in meta else None
 
     planner_cfg = cfg["planner"]
-    subgoal_resolver = NearestSubgoalResolver(cfg["data"]["cache_path"], device)
+    train_indices = _split_step_indices(cfg["data"]["cache_path"], "train", cfg)
+    subgoal_resolver = NearestSubgoalResolver(cfg["data"]["cache_path"], device, allowed_indices=train_indices)
     high_level_planner = HighLevelCEMPlanner(
         skill_wm=modules["skill_wm"],
         skill_prior=modules["skill_prior"],
@@ -194,6 +227,8 @@ def main() -> None:
         seed=cfg["seed"],
         max_goal_gap=planner_cfg.get("max_episode_steps"),
     )
+    if not goal_pairs:
+        raise RuntimeError("No eval goal pairs were sampled; check split size, goal_gap, and max_episode_steps")
 
     summary = {}
     flat_records = [_rollout_flat(pair, planners, modules, cfg["data"]["cache_path"], device) for pair in goal_pairs]

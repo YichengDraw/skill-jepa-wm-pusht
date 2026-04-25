@@ -372,8 +372,8 @@ def write_plots(records: list[dict], summary: dict[str, dict[str, float]]) -> di
     ax.plot(shared_idx, [paired["flat"][idx] for idx in shared_idx], label="Flat", linewidth=1.3)
     ax.plot(shared_idx, [paired["hierarchical"][idx] for idx in shared_idx], label="Hierarchical", linewidth=1.3)
     ax.set_xlabel("Sampled pair index")
-    ax.set_ylabel("Final pose distance")
-    ax.set_title("Paired Final Pose Distance")
+    ax.set_ylabel("Final sampled-state distance")
+    ax.set_title("Paired Final Sampled-State Distance")
     ax.legend()
     fig.tight_layout()
     distance_plot = plot_dir / "paired_state_distance.png"
@@ -492,13 +492,15 @@ def write_report(summary: dict[str, dict[str, float]], plots: dict[str, Path], m
             f"{phase_a.get('unique_episode_count', 0)} unique episodes, "
             f"requested_split={phase_a.get('requested_eval_split', phase_a.get('eval_split'))}, "
             f"actual_split={phase_a.get('eval_split')}, "
-            f"subgoal_scope={phase_a.get('subgoal_scope')}."
+            f"subgoal_scope={phase_a.get('subgoal_scope')}, "
+            f"goal_mode={phase_a.get('goal_mode', 'legacy')}, "
+            f"task_success_claim_supported={phase_a.get('task_success_claim_supported', False)}."
         )
         phase_a_table = [
             "",
             "## Phase A Fresh Eval",
             "",
-            "| Method | Coverage success | Goal-state success | Mean sampled-state distance | Mean latency |",
+            "| Method | Fixed-task coverage diagnostic | Goal-state success | Mean sampled-state distance | Mean latency |",
             "|---|---:|---:|---:|---:|",
         ]
         for method in ["flat", "hierarchical"]:
@@ -513,7 +515,7 @@ def write_report(summary: dict[str, dict[str, float]], plots: dict[str, Path], m
         "",
         "## Verdict",
         "",
-        "Use coverage success as the primary Push-T metric. The legacy locked artifact does not support a standard Push-T success claim: both flat and hierarchical have 0.00 coverage success.",
+        "Use task-aligned coverage success as the primary Push-T metric. The tracked debug and legacy locked artifacts are trajectory-goal diagnostics and do not support a standard Push-T task-success claim.",
         "",
         "## Legacy Locked Artifact Re-Score",
         "",
@@ -529,7 +531,7 @@ def write_report(summary: dict[str, dict[str, float]], plots: dict[str, Path], m
     lines.extend(
         [
             "",
-            "The old `success_rate` column measured pose-to-sampled-goal success, not standard Push-T coverage success.",
+            "The old `success_rate` column measured sampled-trajectory goal-state success, not standard Push-T coverage success.",
             phase_a_text,
             *phase_a_table,
             "",
@@ -551,7 +553,7 @@ def write_report(summary: dict[str, dict[str, float]], plots: dict[str, Path], m
             ("Model Pipeline", DOCS / "model_pipeline.png"),
             ("Experiment Flow", DOCS / "experiment_flow.png"),
             ("Coverage vs Goal-State Success", plots["coverage_plot"]),
-            ("Paired Pose Distance", plots["distance_plot"]),
+            ("Paired Sampled-State Distance", plots["distance_plot"]),
             ("Planning Latency", plots["latency_plot"]),
         ]:
             fig, ax = plt.subplots(figsize=(11, 7.2))

@@ -12,9 +12,12 @@ from skill_jepa.analysis.eval_pusht_online import (
     _eval_split_summary_fields,
     _goal_state_eval,
     _prepare_output_dir,
+    _select_task_goal_indices,
     _set_eval_seed,
+    _validate_eval_provenance,
+    _validate_goal_pairs,
 )
-from skill_jepa.data import EpisodeGoalSampler
+from skill_jepa.data import EpisodeGoalSampler, split_episode_ids
 from skill_jepa.envs import PushTEnv
 from skill_jepa.trainers.common import load_checkpoint
 
@@ -95,6 +98,99 @@ def test_goal_sampler_records_train_fallback_when_eval_splits_empty(tmp_path: Pa
     assert len(sampler.episode_ids) == 2
 
 
+def test_split_episode_ids_keeps_train_val_test_disjoint_when_test_rounds_high():
+    splits = split_episode_ids(num_episodes=3, val_fraction=0.0, test_fraction=0.84, seed=0)
+
+    train_ids = set(splits["train"].tolist())
+    val_ids = set(splits["val"].tolist())
+    test_ids = set(splits["test"].tolist())
+    assert train_ids
+    assert not (train_ids & val_ids)
+    assert not (train_ids & test_ids)
+    assert not (val_ids & test_ids)
+    assert train_ids | val_ids | test_ids == {0, 1, 2}
+
+
+def test_goal_sampler_uses_valid_episodes_instead_of_dropping_short_draws(tmp_path: Path):
+    cache_path = tmp_path / "cache.h5"
+    _write_goal_cache(cache_path, np.array([10, 10, 100, 100], dtype=np.int32))
+    sampler = EpisodeGoalSampler(cache_path, split="train", val_fraction=0.0, test_fraction=0.0, seed=0, goal_gap=50)
+
+    pairs = sampler.sample(2, seed=25, allow_replacement=False)
+
+    assert len(pairs) == 2
+    assert {int(pair["episode_id"]) for pair in pairs} <= {2, 3}
+
+
+def test_goal_sampler_rejects_impossible_max_goal_gap(tmp_path: Path):
+    cache_path = tmp_path / "cache.h5"
+    _write_goal_cache(cache_path, np.array([100], dtype=np.int32))
+    sampler = EpisodeGoalSampler(cache_path, split="train", val_fraction=0.0, test_fraction=0.0, seed=0, goal_gap=50)
+
+    with pytest.raises(ValueError, match="smaller than goal_gap"):
+        sampler.sample(1, seed=0, max_goal_gap=10)
+
+
+def test_task_goal_pool_uses_train_split_success_states(tmp_path: Path):
+    cache_path = tmp_path / "cache.h5"
+    _write_goal_cache(cache_path, np.array([4, 4, 4], dtype=np.int32))
+    with h5py.File(cache_path, "r+") as handle:
+        states = handle["state"][:]
+        states[:] = np.array([100.0, 100.0, 100.0, 100.0, 0.0], dtype=np.float32)
+        train_id = int(split_episode_ids(3, val_fraction=0.0, test_fraction=0.34, seed=0)["train"][0])
+        train_goal_index = int(handle["ep_offset"][train_id] + handle["ep_len"][train_id] - 1)
+        states[train_goal_index] = np.array([100.0, 100.0, 256.0, 256.0, np.pi / 4.0], dtype=np.float32)
+        handle["state"][:] = states
+
+    env = PushTEnv(render_size=224, legacy=False, with_velocity=False)
+    try:
+        goal_indices, coverages = _select_task_goal_indices(
+            cache_path,
+            env=env,
+            val_fraction=0.0,
+            test_fraction=0.34,
+            seed=0,
+            coverage_threshold=0.95,
+            tail_steps=2,
+        )
+    finally:
+        env.close()
+
+    assert goal_indices.tolist() == [train_goal_index]
+    assert coverages[0] >= 0.95
+
+
+def test_task_goal_pool_rejects_cache_without_train_success_states(tmp_path: Path):
+    cache_path = tmp_path / "cache.h5"
+    _write_goal_cache(cache_path, np.array([4, 4, 4], dtype=np.int32))
+    env = PushTEnv(render_size=224, legacy=False, with_velocity=False)
+    try:
+        with pytest.raises(RuntimeError, match="No train-split task goal states"):
+            _select_task_goal_indices(
+                cache_path,
+                env=env,
+                val_fraction=0.0,
+                test_fraction=0.34,
+                seed=0,
+                coverage_threshold=0.95,
+                tail_steps=2,
+            )
+    finally:
+        env.close()
+
+
+def test_validate_goal_pairs_rejects_empty_eval():
+    with pytest.raises(RuntimeError, match="No eval goal pairs"):
+        _validate_goal_pairs([], min_unique_episodes=0)
+
+
+def test_validate_goal_pairs_enforces_minimum_unique_episode_count():
+    pairs = [{"episode_id": np.int64(3)}, {"episode_id": np.int64(3)}]
+
+    with pytest.raises(RuntimeError, match="Only sampled 1 unique episodes"):
+        _validate_goal_pairs(pairs, min_unique_episodes=2)
+
+
 def test_eval_split_summary_records_requested_and_actual_split(tmp_path: Path):
     cache_path = tmp_path / "cache.h5"
     _write_goal_cache(cache_path, np.array([6, 6], dtype=np.int32))
@@ -114,7 +210,10 @@ def test_eval_split_summary_records_requested_and_actual_split(tmp_path: Path):
 
 
 def test_package_discovery_keeps_runtime_import_roots():
-    import tomllib
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # pragma: no cover - exercised only on Python 3.10
+        import tomli as tomllib
 
     pyproject_path = Path(__file__).resolve().parents[2] / "pyproject.toml"
     pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
@@ -237,3 +336,39 @@ def test_subgoal_resolver_respects_allowed_indices(tmp_path: Path):
     subgoal_s = resolver(torch.tensor([0.0, 0.0]))
 
     assert torch.allclose(subgoal_s, torch.tensor([[1.0, 1.0]]))
+
+
+def test_subgoal_resolver_rejects_empty_allowed_indices(tmp_path: Path):
+    cache_path = tmp_path / "cache.h5"
+    with h5py.File(cache_path, "w") as handle:
+        handle.create_dataset("z", data=np.zeros((1, 2), dtype=np.float32))
+        handle.create_dataset("s", data=np.zeros((1, 1, 2), dtype=np.float32))
+
+    with pytest.raises(ValueError, match="empty allowed index"):
+        NearestSubgoalResolver(str(cache_path), torch.device("cpu"), allowed_indices=np.array([], dtype=np.int64))
+
+
+def test_eval_provenance_rejects_projector_mismatch(tmp_path: Path):
+    cache_path = tmp_path / "cache.h5"
+    projector_a = tmp_path / "projector_a.pt"
+    projector_b = tmp_path / "projector_b.pt"
+    projector_a.write_bytes(b"projector-a")
+    projector_b.write_bytes(b"projector-b")
+    with h5py.File(cache_path, "w") as handle:
+        handle.attrs["projector_ckpt"] = str(projector_a)
+
+    cfg = {
+        "data": {"cache_path": str(cache_path), "projector_ckpt": str(projector_b)},
+        "encoder": {"model_id": "encoder", "state_dim": 4},
+        "model": {"hidden_dim": 8},
+    }
+    checkpoint_payload = {
+        "config": {
+            "data": {"cache_path": str(cache_path), "projector_ckpt": str(projector_a)},
+            "encoder": cfg["encoder"],
+            "model": cfg["model"],
+        }
+    }
+
+    with pytest.raises(RuntimeError, match="projector"):
+        _validate_eval_provenance(cfg, checkpoint_payload)

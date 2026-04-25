@@ -29,19 +29,19 @@ def cache_metadata(cache_path: str | Path) -> Dict[str, int]:
 
 
 def split_episode_ids(num_episodes: int, val_fraction: float, test_fraction: float, seed: int) -> Dict[str, np.ndarray]:
+    if num_episodes <= 0:
+        raise ValueError("num_episodes must be positive")
     rng = np.random.default_rng(seed)
     ids = np.arange(num_episodes)
     rng.shuffle(ids)
     n_test = max(1, int(round(num_episodes * test_fraction))) if test_fraction > 0 and num_episodes > 2 else 0
-    n_val = max(1, int(round(num_episodes * val_fraction))) if val_fraction > 0 and num_episodes - n_test > 1 else 0
-    if n_test + n_val >= num_episodes:
-        n_val = max(0, min(n_val, num_episodes - n_test - 1))
+    n_test = min(n_test, max(0, num_episodes - 1))
+    remaining_after_test = num_episodes - n_test
+    n_val = max(1, int(round(num_episodes * val_fraction))) if val_fraction > 0 and remaining_after_test > 1 else 0
+    n_val = min(n_val, max(0, remaining_after_test - 1))
     test_ids = np.sort(ids[:n_test])
     val_ids = np.sort(ids[n_test : n_test + n_val])
     train_ids = np.sort(ids[n_test + n_val :])
-    if len(train_ids) == 0:
-        train_ids = np.sort(ids[-1:])
-        val_ids = np.sort(ids[: max(0, num_episodes - len(train_ids) - len(test_ids))])
     return {"train": train_ids, "val": val_ids, "test": test_ids}
 
 
@@ -183,34 +183,41 @@ class EpisodeGoalSampler:
         max_goal_gap: int | None = None,
         allow_replacement: bool = False,
     ) -> List[Dict[str, np.ndarray]]:
+        if max_goal_gap is not None and int(max_goal_gap) < int(self.goal_gap):
+            raise ValueError(f"max_goal_gap={max_goal_gap} is smaller than goal_gap={self.goal_gap}")
         rng = np.random.default_rng(seed)
         result: List[Dict[str, np.ndarray]] = []
         with h5py.File(self.cache_path, "r") as handle:
-            if len(self.episode_ids) == 0:
+            if len(self.episode_ids) == 0 or int(num_pairs) <= 0:
+                return result
+            valid_episode_ids = np.asarray(
+                [int(episode_id) for episode_id in self.episode_ids.tolist() if int(self.ep_len[episode_id]) > self.goal_gap],
+                dtype=np.int64,
+            )
+            if len(valid_episode_ids) == 0:
                 return result
             sample_size = int(num_pairs)
             if not allow_replacement:
-                sample_size = min(sample_size, len(self.episode_ids))
+                sample_size = min(sample_size, len(valid_episode_ids))
             chosen_eps = rng.choice(
-                self.episode_ids,
+                valid_episode_ids,
                 size=sample_size,
-                replace=bool(allow_replacement and len(self.episode_ids) < sample_size),
+                replace=bool(allow_replacement and len(valid_episode_ids) < sample_size),
             )
             for episode_id in chosen_eps.tolist():
                 ep_len = int(self.ep_len[episode_id])
-                if ep_len <= self.goal_gap:
-                    continue
                 offset = int(self.ep_offset[episode_id])
-                max_start = max(1, ep_len - self.goal_gap)
+                max_start = ep_len - self.goal_gap
                 start_local = int(rng.integers(0, max_start))
                 goal_upper = ep_len
                 if max_goal_gap is not None:
                     goal_upper = min(goal_upper, start_local + max_goal_gap + 1)
                 goal_lower = start_local + self.goal_gap
                 if goal_upper <= goal_lower:
-                    goal_upper = min(ep_len, goal_lower + 1)
-                if goal_upper <= goal_lower:
-                    continue
+                    raise RuntimeError(
+                        f"Invalid goal window for episode={episode_id}, start={start_local}, "
+                        f"goal_gap={self.goal_gap}, max_goal_gap={max_goal_gap}"
+                    )
                 goal_local = int(rng.integers(goal_lower, goal_upper))
                 start_idx = offset + start_local
                 goal_idx = offset + goal_local

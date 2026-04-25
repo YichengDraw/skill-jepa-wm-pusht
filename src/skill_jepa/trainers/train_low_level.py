@@ -99,7 +99,12 @@ def main() -> None:
     modules = build_skill_modules(cfg, cfg["data"]["cache_path"])
     modules.update(build_low_level_modules(cfg, cfg["data"]["cache_path"]))
     if cfg["training"].get("passive_checkpoint"):
-        load_checkpoint(cfg["training"]["passive_checkpoint"], modules)
+        passive_names = ["skill_idm", "skill_wm", "skill_prior", "skill_proj", "effect_proj"]
+        load_checkpoint(
+            cfg["training"]["passive_checkpoint"],
+            {name: modules[name] for name in passive_names},
+            strict_modules=True,
+        )
     _freeze(modules, ["skill_idm", "skill_wm", "skill_prior", "skill_proj", "effect_proj"])
     modules_to_device(modules, device)
     optimizer = torch.optim.AdamW(

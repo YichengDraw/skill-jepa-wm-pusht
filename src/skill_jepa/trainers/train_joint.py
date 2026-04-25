@@ -94,9 +94,14 @@ def main() -> None:
 
     modules = build_all_modules(cfg, cfg["data"]["cache_path"])
     if cfg["training"].get("passive_checkpoint"):
-        load_checkpoint(cfg["training"]["passive_checkpoint"], modules)
+        passive_names = ["skill_idm", "skill_wm", "skill_prior", "skill_proj", "effect_proj"]
+        load_checkpoint(
+            cfg["training"]["passive_checkpoint"],
+            {name: modules[name] for name in passive_names},
+            strict_modules=True,
+        )
     if cfg["training"].get("low_level_checkpoint"):
-        load_checkpoint(cfg["training"]["low_level_checkpoint"], modules)
+        load_checkpoint(cfg["training"]["low_level_checkpoint"], modules, strict_modules=True)
     modules_to_device(modules, device)
     optimizer = torch.optim.AdamW(
         parameters_for(

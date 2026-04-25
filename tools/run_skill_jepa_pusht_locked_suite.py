@@ -78,6 +78,32 @@ def _run_logged(command: list[str], log_path: Path) -> None:
     raise RuntimeError(f"Command failed with exit code {process.returncode}: {' '.join(command)}\n{tail_text}")
 
 
+def _git_commit() -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return result.stdout.strip()
+
+
+def _summary_matches_current(summary_path: Path, expected_goal_mode: str) -> bool:
+    if not summary_path.exists():
+        return False
+    try:
+        with open(summary_path, "r", encoding="utf-8") as handle:
+            summary = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return False
+    return summary.get("code_commit") == _git_commit() and summary.get("goal_mode") == expected_goal_mode
+
+
 def _write_yaml(path: Path, payload: dict) -> None:
     ensure_dir(path.parent)
     with open(path, "w", encoding="utf-8") as handle:
@@ -135,7 +161,7 @@ def ensure_scaled_cache() -> Path:
 def run_debug_reeval(force: bool = False) -> Path:
     out_dir = EVAL_ROOT / "current_best_checkpoint_100ep"
     summary_path = out_dir / "pusht_online_eval.json"
-    if summary_path.exists() and not force:
+    if not force and _summary_matches_current(summary_path, expected_goal_mode="trajectory"):
         return summary_path
     command = [
         str(PYTHON),
@@ -156,8 +182,10 @@ def run_debug_reeval(force: bool = False) -> Path:
         "4",
         "--subgoal-scope",
         "train",
+        "--goal-mode",
+        "trajectory",
     ]
-    if force:
+    if force or summary_path.exists():
         command.append("--force")
     _run_logged(command, LOG_ROOT / "current_best_checkpoint_100ep.log")
     return summary_path
@@ -237,7 +265,7 @@ def evaluate_seed(seed: int, artifacts: dict[str, Path]) -> tuple[list[dict], li
         for goal_gap, num_eval, save_videos in GOAL_EVALS:
             out_dir = EVAL_ROOT / f"seed_{seed}" / config_name / f"goal_gap_{goal_gap}"
             summary_path = out_dir / "pusht_online_eval.json"
-            if not summary_path.exists():
+            if not _summary_matches_current(summary_path, expected_goal_mode="task"):
                 command = [
                     str(PYTHON),
                     "-m",
@@ -258,9 +286,13 @@ def evaluate_seed(seed: int, artifacts: dict[str, Path]) -> tuple[list[dict], li
                     str(num_eval),
                     "--subgoal-scope",
                     "train",
+                    "--goal-mode",
+                    "task",
                 ]
                 if save_videos:
                     command.extend(["--save-videos", "--video-limit", "2"])
+                if summary_path.exists():
+                    command.append("--force")
                 _run_logged(command, LOG_ROOT / f"seed_{seed}_{config_name}_gap_{goal_gap}.log")
             with open(summary_path, "r", encoding="utf-8") as handle:
                 summary = json.load(handle)
@@ -364,7 +396,7 @@ def aggregate_results(rows: list[dict], episode_rows: list[dict]) -> dict[str, P
     summary_df.to_csv(summary_csv, index=False)
 
     _plot_metric(summary_df, "success_rate", "Success Rate", PLOT_ROOT / "success_rate_by_goal_gap.png")
-    _plot_metric(summary_df, "state_dist", "Mean Pose Distance", PLOT_ROOT / "state_distance_by_goal_gap.png")
+    _plot_metric(summary_df, "state_dist", "Mean Sampled-State Distance", PLOT_ROOT / "state_distance_by_goal_gap.png")
 
     decision_path = _write_decision_report(seed_df, summary_df)
     return {
@@ -500,11 +532,11 @@ def _write_decision_report(seed_df: pd.DataFrame, summary_df: pd.DataFrame) -> P
         "",
         "## Goal-gap 24 summary",
         "",
-        f"- `joint_hier_10pct`: success {hier24['success_rate_mean']:.4f} ± {hier24['success_rate_std']:.4f}, pose distance {hier24['state_dist_mean']:.2f} ± {hier24['state_dist_std']:.2f}",
-        f"- `joint_flat_10pct`: success {flat24['success_rate_mean']:.4f} ± {flat24['success_rate_std']:.4f}, pose distance {flat24['state_dist_mean']:.2f} ± {flat24['state_dist_std']:.2f}",
-        f"- `random_skill_hier_10pct`: success {random24['success_rate_mean']:.4f} ± {random24['success_rate_std']:.4f}, pose distance {random24['state_dist_mean']:.2f} ± {random24['state_dist_std']:.2f}",
-        f"- `labeled_only_flat_10pct`: success {low10_24['success_rate_mean']:.4f} ± {low10_24['success_rate_std']:.4f}, pose distance {low10_24['state_dist_mean']:.2f} ± {low10_24['state_dist_std']:.2f}",
-        f"- `labeled_only_flat_100pct`: success {low100_24['success_rate_mean']:.4f} ± {low100_24['success_rate_std']:.4f}, pose distance {low100_24['state_dist_mean']:.2f} ± {low100_24['state_dist_std']:.2f}",
+        f"- `joint_hier_10pct`: success {hier24['success_rate_mean']:.4f} ± {hier24['success_rate_std']:.4f}, sampled-state distance {hier24['state_dist_mean']:.2f} ± {hier24['state_dist_std']:.2f}",
+        f"- `joint_flat_10pct`: success {flat24['success_rate_mean']:.4f} ± {flat24['success_rate_std']:.4f}, sampled-state distance {flat24['state_dist_mean']:.2f} ± {flat24['state_dist_std']:.2f}",
+        f"- `random_skill_hier_10pct`: success {random24['success_rate_mean']:.4f} ± {random24['success_rate_std']:.4f}, sampled-state distance {random24['state_dist_mean']:.2f} ± {random24['state_dist_std']:.2f}",
+        f"- `labeled_only_flat_10pct`: success {low10_24['success_rate_mean']:.4f} ± {low10_24['success_rate_std']:.4f}, sampled-state distance {low10_24['state_dist_mean']:.2f} ± {low10_24['state_dist_std']:.2f}",
+        f"- `labeled_only_flat_100pct`: success {low100_24['success_rate_mean']:.4f} ± {low100_24['success_rate_std']:.4f}, sampled-state distance {low100_24['state_dist_mean']:.2f} ± {low100_24['state_dist_std']:.2f}",
         "",
         "## Seed-level robustness",
         "",

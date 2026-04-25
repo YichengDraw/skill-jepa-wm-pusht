@@ -20,6 +20,7 @@ os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
 from skill_jepa.data import EpisodeGoalSampler, cache_metadata, split_episode_ids
 from skill_jepa.envs import PushTEnv
+from skill_jepa.envs.pusht_env import pymunk_to_shapely
 from skill_jepa.encoders import FrozenVJEPA2Encoder
 from skill_jepa.modules import StateProjector
 from skill_jepa.planning import HighLevelCEMPlanner, HierarchicalPlanner, LowLevelCEMPlanner, RandomHighLevelPlanner
@@ -36,6 +37,8 @@ class OnlineEvalRecord:
     episode_id: int
     start_index: int
     goal_index: int
+    goal_episode_id: int
+    goal_mode: str
     sampled_goal_gap: int
     success: bool
     coverage_success: bool
@@ -123,6 +126,8 @@ class NearestSubgoalResolver:
         self.device = device
         self.chunk_size = chunk_size
         self.allowed_indices = None if allowed_indices is None else np.asarray(allowed_indices, dtype=np.int64)
+        if self.allowed_indices is not None and len(self.allowed_indices) == 0:
+            raise ValueError("NearestSubgoalResolver received an empty allowed index set")
 
     @torch.no_grad()
     def __call__(self, target_z: torch.Tensor) -> torch.Tensor:
@@ -194,6 +199,79 @@ def _split_step_indices(cache_path: str, split: str, cfg: dict) -> np.ndarray:
     if not indices:
         return np.asarray([], dtype=np.int64)
     return np.concatenate(indices)
+
+
+def _state_coverage(env: PushTEnv, state: np.ndarray) -> float:
+    env._set_state(np.asarray(state, dtype=np.float32))
+    goal_body = env._get_goal_pose_body(env.goal_pose)
+    goal_geom = pymunk_to_shapely(goal_body, env.block.shapes)
+    block_geom = pymunk_to_shapely(env.block, env.block.shapes)
+    return float(block_geom.intersection(goal_geom).area / goal_geom.area)
+
+
+def _candidate_tail_indices(cache_path: str | Path, episode_ids: np.ndarray, tail_steps: int) -> np.ndarray:
+    with h5py.File(cache_path, "r") as handle:
+        ep_len = handle["ep_len"][:]
+        ep_offset = handle["ep_offset"][:]
+    indices: list[int] = []
+    for episode_id in np.asarray(episode_ids, dtype=np.int64).tolist():
+        offset = int(ep_offset[episode_id])
+        length = int(ep_len[episode_id])
+        local_start = max(0, length - int(tail_steps))
+        indices.extend(range(offset + local_start, offset + length))
+    return np.asarray(indices, dtype=np.int64)
+
+
+def _select_task_goal_indices(
+    cache_path: str | Path,
+    env: PushTEnv,
+    val_fraction: float,
+    test_fraction: float,
+    seed: int,
+    coverage_threshold: float,
+    tail_steps: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    with h5py.File(cache_path, "r") as handle:
+        ep_len = handle["ep_len"][:]
+        states = handle["state"]
+        train_ids = split_episode_ids(len(ep_len), val_fraction, test_fraction, seed)["train"]
+        candidate_indices = _candidate_tail_indices(cache_path, train_ids, tail_steps)
+        if len(candidate_indices) == 0:
+            return candidate_indices, np.asarray([], dtype=np.float32)
+        env.reset_to_state = np.asarray(states[int(candidate_indices[0])], dtype=np.float32)
+        env.reset()
+        coverages = np.asarray([_state_coverage(env, states[int(index)]) for index in candidate_indices], dtype=np.float32)
+    goal_mask = coverages >= float(coverage_threshold)
+    if not np.any(goal_mask):
+        best = float(coverages.max()) if len(coverages) else float("nan")
+        raise RuntimeError(
+            "No train-split task goal states reached the Push-T coverage threshold. "
+            f"best_train_tail_coverage={best:.4f}, threshold={coverage_threshold:.4f}. "
+            "Use --goal-mode trajectory only for sampled-trajectory diagnostics."
+        )
+    return candidate_indices[goal_mask], coverages[goal_mask]
+
+
+def _assign_task_goals(
+    goal_pairs: list[dict],
+    cache_path: str | Path,
+    goal_indices: np.ndarray,
+    seed: int,
+) -> list[dict]:
+    rng = np.random.default_rng(seed)
+    chosen_goal_indices = rng.choice(np.asarray(goal_indices, dtype=np.int64), size=len(goal_pairs), replace=True)
+    aligned_pairs: list[dict] = []
+    with h5py.File(cache_path, "r") as handle:
+        states = handle["state"]
+        episode_idx = handle["episode_idx"]
+        for pair, goal_index in zip(goal_pairs, chosen_goal_indices.tolist()):
+            aligned = dict(pair)
+            aligned["goal_index"] = np.int64(goal_index)
+            aligned["goal_state"] = states[int(goal_index)].copy()
+            aligned["goal_episode_id"] = np.int64(episode_idx[int(goal_index)])
+            aligned["goal_mode"] = "task"
+            aligned_pairs.append(aligned)
+    return aligned_pairs
 
 
 def _build_planners(
@@ -297,6 +375,8 @@ def _run_episode(
     start_index: int,
     goal_index: int,
     episode_id: int,
+    goal_episode_id: int,
+    goal_mode: str,
     start_state: np.ndarray,
     goal_state: np.ndarray,
     max_steps: int,
@@ -357,7 +437,9 @@ def _run_episode(
         episode_id=episode_id,
         start_index=start_index,
         goal_index=goal_index,
-        sampled_goal_gap=goal_index - start_index,
+        goal_episode_id=goal_episode_id,
+        goal_mode=goal_mode,
+        sampled_goal_gap=goal_index - start_index if goal_episode_id == episode_id else -1,
         success=coverage_success,
         coverage_success=coverage_success,
         goal_state_success=bool(final_metrics["goal_state_success"]),
@@ -392,6 +474,8 @@ def _write_records_csv(path: Path, records_by_method: dict[str, list[dict]]) -> 
         "episode_id",
         "start_index",
         "goal_index",
+        "goal_episode_id",
+        "goal_mode",
         "sampled_goal_gap",
         "success",
         "coverage_success",
@@ -435,6 +519,80 @@ def _eval_split_summary_fields(sampler: EpisodeGoalSampler, requested_split: str
     }
 
 
+def _validate_goal_pairs(goal_pairs: list[dict], min_unique_episodes: int) -> int:
+    if not goal_pairs:
+        raise RuntimeError("No eval goal pairs were sampled; check split size, goal_gap, and max_episode_steps")
+    unique_episode_count = len({int(pair["episode_id"]) for pair in goal_pairs})
+    if unique_episode_count < int(min_unique_episodes):
+        raise RuntimeError(
+            f"Only sampled {unique_episode_count} unique episodes, below --min-unique-episodes={min_unique_episodes}"
+        )
+    return unique_episode_count
+
+
+def _same_record_rate(
+    records_by_method: dict[str, list[dict]],
+    reference: str,
+    candidate: str,
+    metric: str,
+    higher_is_better: bool,
+) -> float:
+    pairs = list(zip(records_by_method[reference], records_by_method[candidate]))
+    if not pairs:
+        return 0.0
+    if higher_is_better:
+        wins = [float(candidate_record[metric] > reference_record[metric]) for reference_record, candidate_record in pairs]
+    else:
+        wins = [float(candidate_record[metric] < reference_record[metric]) for reference_record, candidate_record in pairs]
+    return float(np.mean(wins))
+
+
+def _normalize_path_text(path_like: str | os.PathLike) -> str:
+    return str(Path(str(path_like)).expanduser().resolve(strict=False)).replace("\\", "/")
+
+
+def _assert_same_file_identity(label: str, recorded: object, current: object) -> None:
+    if recorded is None or current is None:
+        return
+    recorded_path = Path(str(recorded))
+    current_path = Path(str(current))
+    if recorded_path.exists() and current_path.exists():
+        recorded_hash = _sha256_file(recorded_path)
+        current_hash = _sha256_file(current_path)
+        if recorded_hash != current_hash:
+            raise RuntimeError(
+                f"{label} does not match: recorded file hash {recorded_hash} != current file hash {current_hash}"
+            )
+        return
+    if _normalize_path_text(recorded_path) != _normalize_path_text(current_path):
+        raise RuntimeError(
+            f"{label} cannot be validated against the recorded path: "
+            f"recorded={_portable_path(recorded_path)}, current={_portable_path(current_path)}"
+        )
+
+
+def _validate_eval_provenance(cfg: dict, checkpoint_payload: dict) -> None:
+    checkpoint_cfg = checkpoint_payload.get("config", {})
+    if checkpoint_cfg:
+        for section in ["encoder", "model"]:
+            if checkpoint_cfg.get(section) != cfg.get(section):
+                raise RuntimeError(f"Checkpoint {section} config does not match the runtime config")
+        checkpoint_data = checkpoint_cfg.get("data", {})
+        _assert_same_file_identity(
+            "Checkpoint cache_path",
+            checkpoint_data.get("cache_path"),
+            cfg.get("data", {}).get("cache_path"),
+        )
+        _assert_same_file_identity(
+            "Checkpoint projector_ckpt",
+            checkpoint_data.get("projector_ckpt"),
+            cfg.get("data", {}).get("projector_ckpt"),
+        )
+    with h5py.File(cfg["data"]["cache_path"], "r") as handle:
+        cache_projector = handle.attrs.get("projector_ckpt")
+    _assert_same_file_identity("Cache projector_ckpt", cache_projector, cfg["data"].get("projector_ckpt"))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True, type=str)
@@ -458,6 +616,9 @@ def main() -> None:
     parser.add_argument("--min-unique-episodes", type=int, default=0)
     parser.add_argument("--deterministic-timing", action="store_true")
     parser.add_argument("--subgoal-scope", choices=["train", "all", "none"], default="train")
+    parser.add_argument("--allow-provenance-mismatch", action="store_true")
+    parser.add_argument("--goal-mode", choices=["task", "trajectory"], default="task")
+    parser.add_argument("--task-goal-tail-steps", type=int, default=16)
     args = parser.parse_args()
 
     cfg = load_yaml(args.config)
@@ -476,7 +637,9 @@ def main() -> None:
     cfg["planner"] = planner_cfg
 
     modules = build_all_modules(cfg, cfg["data"]["cache_path"])
-    load_checkpoint(args.checkpoint, modules, strict_modules=True)
+    checkpoint_payload = load_checkpoint(args.checkpoint, modules, strict_modules=True)
+    if not args.allow_provenance_mismatch:
+        _validate_eval_provenance(cfg, checkpoint_payload)
     modules_to_device(modules, device)
     for module in modules.values():
         module.eval()
@@ -514,15 +677,54 @@ def main() -> None:
         allow_replacement=args.allow_replacement,
     )
     split_summary = _eval_split_summary_fields(sampler, eval_split)
-    unique_episode_count = len({int(pair["episode_id"]) for pair in goal_pairs})
-    if unique_episode_count < int(args.min_unique_episodes):
-        raise RuntimeError(
-            f"Only sampled {unique_episode_count} unique episodes, below --min-unique-episodes={args.min_unique_episodes}"
-        )
+    unique_episode_count = _validate_goal_pairs(goal_pairs, int(args.min_unique_episodes))
 
     with_velocity = bool(goal_pairs and np.asarray(goal_pairs[0]["start_state"]).shape[0] > 5)
     env = _make_env(with_velocity=with_velocity)
     coverage_threshold = float(getattr(env, "success_threshold", 0.95))
+    goal_pool_summary: dict[str, object] = {
+        "goal_mode": args.goal_mode,
+        "task_success_claim_supported": bool(args.goal_mode == "task"),
+    }
+    if args.goal_mode == "task":
+        task_goal_indices, task_goal_coverages = _select_task_goal_indices(
+            cache_path=cfg["data"]["cache_path"],
+            env=env,
+            val_fraction=cfg["data"]["val_fraction"],
+            test_fraction=cfg["data"]["test_fraction"],
+            seed=int(cfg["seed"]),
+            coverage_threshold=coverage_threshold,
+            tail_steps=int(args.task_goal_tail_steps),
+        )
+        goal_pairs = _assign_task_goals(
+            goal_pairs,
+            cache_path=cfg["data"]["cache_path"],
+            goal_indices=task_goal_indices,
+            seed=int(cfg["seed"]) + 100003,
+        )
+        goal_pool_summary.update(
+            {
+                "task_goal_split": "train",
+                "task_goal_tail_steps": int(args.task_goal_tail_steps),
+                "task_goal_pool_size": int(len(task_goal_indices)),
+                "task_goal_pool_mean_coverage": float(np.mean(task_goal_coverages)),
+                "task_goal_pool_min_coverage": float(np.min(task_goal_coverages)),
+            }
+        )
+    else:
+        goal_pairs = [
+            {**pair, "goal_episode_id": np.int64(pair["episode_id"]), "goal_mode": "trajectory"}
+            for pair in goal_pairs
+        ]
+        goal_pool_summary.update(
+            {
+                "task_goal_split": None,
+                "task_goal_tail_steps": None,
+                "task_goal_pool_size": 0,
+                "task_goal_pool_mean_coverage": None,
+                "task_goal_pool_min_coverage": None,
+            }
+        )
     methods = _resolve_methods(args.mode)
     execute_actions_per_plan = int(planner_cfg.get("execute_actions_per_plan", 1))
     records_by_method: dict[str, list[dict]] = {}
@@ -543,6 +745,7 @@ def main() -> None:
         },
         "code_commit": _git_commit(),
         "coverage_threshold": coverage_threshold,
+        **goal_pool_summary,
         **split_summary,
         "execute_actions_per_plan": execute_actions_per_plan,
         "goal_gap": int(planner_cfg["goal_gap"]),
@@ -575,6 +778,8 @@ def main() -> None:
                     start_index=int(pair["start_index"]),
                     goal_index=int(pair["goal_index"]),
                     episode_id=int(pair["episode_id"]),
+                    goal_episode_id=int(pair["goal_episode_id"]),
+                    goal_mode=str(pair["goal_mode"]),
                     start_state=np.asarray(pair["start_state"], dtype=np.float32),
                     goal_state=np.asarray(pair["goal_state"], dtype=np.float32),
                     max_steps=int(planner_cfg["max_episode_steps"]),
@@ -610,22 +815,24 @@ def main() -> None:
                 "unique_episode_count": len({record["episode_id"] for record in method_records}),
             }
         if "hierarchical" in summary and "flat" in summary:
-            summary["hierarchical_better_rate"] = float(
-                np.mean(
-                    [
-                        float(hier["state_dist"] < flat["state_dist"])
-                        for flat, hier in zip(records_by_method["flat"], records_by_method["hierarchical"])
-                    ]
-                )
+            summary["hierarchical_coverage_better_rate"] = _same_record_rate(
+                records_by_method, "flat", "hierarchical", "coverage_success", True
+            )
+            summary["hierarchical_goal_state_better_rate"] = _same_record_rate(
+                records_by_method, "flat", "hierarchical", "goal_state_success", True
+            )
+            summary["hierarchical_sampled_state_better_rate"] = _same_record_rate(
+                records_by_method, "flat", "hierarchical", "state_dist", False
             )
         if "hierarchical" in summary and "random_hierarchical" in summary:
-            summary["hierarchical_vs_random_better_rate"] = float(
-                np.mean(
-                    [
-                        float(hier["state_dist"] < rnd["state_dist"])
-                        for rnd, hier in zip(records_by_method["random_hierarchical"], records_by_method["hierarchical"])
-                    ]
-                )
+            summary["hierarchical_vs_random_coverage_better_rate"] = _same_record_rate(
+                records_by_method, "random_hierarchical", "hierarchical", "coverage_success", True
+            )
+            summary["hierarchical_vs_random_goal_state_better_rate"] = _same_record_rate(
+                records_by_method, "random_hierarchical", "hierarchical", "goal_state_success", True
+            )
+            summary["hierarchical_vs_random_sampled_state_better_rate"] = _same_record_rate(
+                records_by_method, "random_hierarchical", "hierarchical", "state_dist", False
             )
     finally:
         env.close()

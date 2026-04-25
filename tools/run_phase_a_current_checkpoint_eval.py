@@ -66,6 +66,8 @@ def main() -> None:
         str(args.num_eval_episodes),
         "--subgoal-scope",
         "train",
+        "--goal-mode",
+        "trajectory",
     ]
     _run(
         common

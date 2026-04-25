@@ -51,8 +51,9 @@
 \fcolorbox{ReportLine}{ReportGray}{
 \begin{minipage}{0.97\linewidth}
 \textbf{Executive Summary.}
-This round completed the first locked-suite deliverable: a cache-consistent, deterministic, 100-episode reevaluation of the current best Push-T checkpoint under the frozen protocol.
-The hierarchical and flat planners tied on success rate at \textbf{7\%}, but the hierarchical planner improved mean pose distance from \textbf{355.30} to \textbf{264.43}, reduced average planning latency from \textbf{0.564 s} to \textbf{0.249 s}, and beat flat on \textbf{57\%} of episodes.
+This historical report used the earlier sampled-trajectory goal-state metric.
+The later release re-score found \textbf{0\%} standard Push-T coverage success for both planners, so the numbers below are trajectory diagnostics rather than a Push-T task-success claim.
+Under that diagnostic, the hierarchical and flat planners tied on sampled goal-state success at \textbf{7\%}, while the hierarchical planner improved mean sampled-state distance from \textbf{355.30} to \textbf{264.43}, reduced average planning latency from \textbf{0.564 s} to \textbf{0.249 s}, and beat flat on \textbf{57\%} of sampled pairs.
 In parallel, I fixed the remaining implementation gaps that blocked the scaled pilot: full Push-T pixel decoding, projector-consistent cache generation, exact episode-count cache slicing, a random-skill hierarchical baseline, and locked-suite artifact export.
 The 3-seed scaled pilot itself is still incomplete, so no continue/stop decision has been issued for the hierarchy line and no feasibility critic has been added.
 \end{minipage}
@@ -91,7 +92,7 @@ I reran the current best Push-T debug checkpoint on \textbf{100 evaluation episo
 \begin{tabular}{lrrrr}
 \toprule
 \rowcolor{ReportBlue!10}
-Method & Success & Pose Dist. & Planning Latency & Notes \\
+Method & Goal-state Success & Sampled-State Dist. & Planning Latency & Notes \\
 \midrule
 Hierarchical & 0.07 & 264.43 & 0.249 s & same checkpoint \\
 Flat & 0.07 & 355.30 & 0.564 s & same checkpoint \\
@@ -102,7 +103,7 @@ Flat & 0.07 & 355.30 & 0.564 s & same checkpoint \\
 Additional comparison summary:
 
 \begin{itemize}
-\item hierarchical better-than-flat rate by pose distance: \textbf{0.57},
+\item hierarchical better-than-flat rate by sampled-state distance: \textbf{0.57},
 \item representative rollout GIFs were saved for both planners,
 \item per-episode records were exported to CSV.
 \end{itemize}
@@ -131,9 +132,9 @@ The main code and artifact paths produced in this round were:
 \item \texttt{src/skill\_jepa/planning/\_\_init\_\_.py}
 \item \texttt{tools/cache\_vjepa\_features.py}
 \item \texttt{tools/run\_skill\_jepa\_pusht\_locked\_suite.py}
-\item \texttt{outputs/skill\_jepa/pusht\_locked\_suite/evals/current\_best\_checkpoint\_100ep/pusht\_online\_eval.json}
-\item \texttt{outputs/skill\_jepa/pusht\_locked\_suite/evals/current\_best\_checkpoint\_100ep/pusht\_online\_records.csv}
-\item \texttt{outputs/skill\_jepa/pusht\_locked\_suite/reports/current\_best\_checkpoint\_comparison.csv}
+\item \texttt{artifacts/pusht\_locked\_suite/evals/current\_best\_checkpoint\_100ep/pusht\_online\_eval.json}
+\item \texttt{artifacts/pusht\_locked\_suite/evals/current\_best\_checkpoint\_100ep/pusht\_online\_records.csv}
+\item \texttt{artifacts/pusht\_locked\_suite/reports/current\_best\_checkpoint\_comparison.csv}
 \end{itemize}
 
 \section*{4. What Is Still Incomplete}

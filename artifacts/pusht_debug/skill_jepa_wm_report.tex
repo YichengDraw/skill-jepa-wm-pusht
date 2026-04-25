@@ -53,8 +53,8 @@
 \begin{minipage}{0.97\linewidth}
 \textbf{Executive Summary.}
 I implemented the Skill-JEPA-WM pipeline inside \texttt{jepa-wms}, corrected several evaluation inconsistencies, and reran the debug experiments on the local RTX 4070 8GB.
-The final corrected protocol shows that the \textbf{10\%-label hierarchical model outperforms both the flat variant and the labeled-only baseline} on Push-T debug.
-Under the best stable setting (\texttt{K=4}, \texttt{execute\_actions\_per\_plan=4}), the hierarchical controller reaches \textbf{25\% success} with mean pose distance \textbf{254.61}, while the flat controller remains at \textbf{0\% success} with pose distance \textbf{459.92}, and the labeled-only baseline remains at \textbf{0\% success} with pose distance \textbf{793.81}.
+This report is now historical: its headline \textbf{25\% success} value is a sampled-trajectory goal-state diagnostic, not standard Push-T coverage success.
+The later release re-score found that these debug artifacts do not support a Push-T task-success claim; use them only for implementation and trajectory-reaching context.
 \end{minipage}
 }
 
@@ -119,7 +119,7 @@ I corrected all four issues:
 
 \begin{itemize}
 \item capped goal sampling to the control horizon,
-\item reported pose distance on the task state,
+\item reported sampled-state distance on the task state,
 \item used cache-consistent start and goal latents,
 \item reseeded each evaluation episode deterministically.
 \end{itemize}
@@ -162,13 +162,13 @@ The corrected online task set is reachable under oracle replay of cached expert 
 \toprule
 Metric & Value \\
 \midrule
-Oracle replay success rate & 1.00 \\
-Oracle replay mean pose distance & 2.55 \\
+Oracle replay sampled-goal success rate & 1.00 \\
+Oracle replay mean sampled-state distance & 2.55 \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-This matters because it shows that failures in the learned controller are model or planning failures, not an impossible evaluation setup.
+This matters only for the sampled-trajectory diagnostic; it is not standard Push-T coverage-success evidence.
 
 \section*{5. Final Results}
 
@@ -196,7 +196,7 @@ The skill standard deviation remains positive, and rollout losses decrease subst
 \begin{tabular}{llllll}
 \toprule
 \rowcolor{ReportBlue!10}
-Run & Success & Pose Dist. & Planner Latency & Better Rate & Comment \\
+Run & Sampled-Goal Success & Sampled-State Dist. & Planner Latency & Better Rate & Comment \\
 \midrule
 Joint hierarchical (\(K=4, M=4\)) & 0.25 & 254.61 & 0.212 s & 0.75 & Best final run \\
 Joint flat (\(K=4, M=4\)) & 0.00 & 459.92 & 0.525 s & -- & Same checkpoint, flat planner \\
@@ -208,16 +208,16 @@ Joint hierarchical (\(K=2\) ablation) & 0.00 & 615.69 & 0.282 s & 0.375 & Weaker
 
 \subsection*{5.3 Interpretation}
 
-The corrected final result supports three claims:
+The historical trajectory diagnostic supports three limited claims:
 
 \begin{itemize}
 \item The hierarchical planner beats the flat primitive-only variant on the same learned model.
 \item The 10\%-label hierarchical method beats the labeled-only low-level baseline at the same label budget.
-\item The implementation is complete enough to satisfy the first complete-run criteria from the spec.
+\item The implementation was complete enough to run the first trajectory-diagnostic milestone from the spec.
 \end{itemize}
 
 The main remaining limitation is absolute control quality.
-The learned controller is still well below the oracle replay baseline on this small debug backup.
+The debug cache does not support a standard Push-T coverage-success claim.
 
 \section*{6. Summary of Concrete Fixes}
 
@@ -230,7 +230,7 @@ Area & Fix \\
 \midrule
 Feature cache & Replaced duplicated single-frame inputs with causal two-frame clips \\
 Goal construction & Restricted online goals to the executable control budget \\
-State metric & Reported pose distance instead of mixing in velocity terms \\
+State metric & Reported sampled-state distance instead of mixing in velocity terms \\
 Goal encoding & Used cache-consistent start and goal latents for online evaluation \\
 Planner comparison & Reseeded each evaluation episode deterministically \\
 Execution policy & Added execution of the first \(M\) primitive actions before replanning \\
@@ -241,7 +241,7 @@ Push-T runtime & Patched local gymnasium and pymunk compatibility issues \\
 
 \section*{7. Conclusion}
 
-This work completed the Skill-JEPA-WM debug pipeline, corrected the evaluation protocol, and produced a final stable result that satisfies the initial milestone.
+This work completed the Skill-JEPA-WM debug pipeline and produced a historical sampled-trajectory diagnostic result.
 The best current setting is the corrected \texttt{K=4} model with \texttt{execute\_actions\_per\_plan=4}.
 Its online Push-T debug result is:
 
@@ -249,7 +249,7 @@ Its online Push-T debug result is:
 \fcolorbox{ReportBlue}{ReportBlue!6}{
 \begin{minipage}{0.9\linewidth}
 \textbf{Final headline result.}
-Hierarchical control reached \textbf{25\% success} and mean pose distance \textbf{254.61}, while the matched flat controller stayed at \textbf{0\% success} and the labeled-only baseline also stayed at \textbf{0\% success}.
+Hierarchical control reached \textbf{25\% sampled-goal success} and mean sampled-state distance \textbf{254.61}, while the matched flat controller stayed at \textbf{0\% sampled-goal success} and the labeled-only baseline also stayed at \textbf{0\% sampled-goal success}.
 \end{minipage}
 }
 \end{center}
