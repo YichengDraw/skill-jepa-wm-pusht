@@ -4,7 +4,7 @@
   "allow_under_sampling": true,
   "cache_path": "external/phase_a_debug_cache.h5",
   "checkpoint": "external/phase_a_debug_joint_best.pt",
-  "code_commit": "2ba22a2e67796e4a10f770bcea2b850bebb60463",
+  "code_commit": "cd97174634e0568090927413b91bd3d8ed8d7e84",
   "code_commit_semantics": "code_commit records the evaluator source commit at run time; the artifact commit is necessarily later",
   "code_dirty": false,
   "code_status_sha256": "ad16db587d693b3d8aa9365896a0cdd57e10b89a2b50bd3591f3282d50d6bd71",
@@ -20,7 +20,7 @@
     "goal_state_success_diagnostic_rate": 0.0,
     "goal_state_success_is_task_metric": false,
     "goal_state_success_scope": "trajectory_full_state_diagnostic",
-    "planning_latency_sec": 0.7939918625052087,
+    "planning_latency_sec": 0.3045270875154529,
     "records": [
       {
         "coverage_success": false,
@@ -34,7 +34,7 @@
         "goal_mode": "trajectory",
         "goal_state_success": false,
         "max_coverage": 0.17450593355568816,
-        "planning_latency_sec": 0.7939918625052087,
+        "planning_latency_sec": 0.3045270875154529,
         "sampled_goal_gap": 26,
         "skill_consistency": 0.0,
         "start_index": 52,
@@ -62,7 +62,7 @@
     "goal_state_success_diagnostic_rate": 0.0,
     "goal_state_success_is_task_metric": false,
     "goal_state_success_scope": "trajectory_full_state_diagnostic",
-    "planning_latency_sec": 0.35156469998764805,
+    "planning_latency_sec": 0.1288225749740377,
     "records": [
       {
         "coverage_success": false,
@@ -76,7 +76,7 @@
         "goal_mode": "trajectory",
         "goal_state_success": false,
         "max_coverage": 0.17450593355568816,
-        "planning_latency_sec": 0.35156469998764805,
+        "planning_latency_sec": 0.1288225749740377,
         "sampled_goal_gap": 26,
         "skill_consistency": 0.18830398935824633,
         "start_index": 52,
@@ -116,6 +116,8 @@
       "Cache does not record projector_ckpt_sha256; projector overwrite detection is unavailable"
     ]
   },
+  "provenance_complete": false,
+  "provenance_warning_count": 7,
   "requested_eval_split": "test",
   "requested_num_eval_episodes": 100,
   "split_seed": 7,

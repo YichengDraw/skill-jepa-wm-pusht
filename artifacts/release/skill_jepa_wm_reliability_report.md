@@ -18,8 +18,8 @@ Phase A fresh eval: 1 sampled pairs, 1 unique episodes, requested_split=test, ac
 
 | Method | Coverage diagnostic | Goal-state diagnostic | Mean sampled-state distance | Mean latency |
 |---|---:|---:|---:|---:|
-| flat | 0.00 | 0.00 | 321.15 | 0.794s |
-| hierarchical | 0.00 | 0.00 | 464.56 | 0.352s |
+| flat | 0.00 | 0.00 | 321.15 | 0.305s |
+| hierarchical | 0.00 | 0.00 | 464.56 | 0.129s |
 
 ## Figures
 
