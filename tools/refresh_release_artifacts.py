@@ -498,7 +498,7 @@ def write_report(summary: dict[str, dict[str, float]], plots: dict[str, Path], m
             "",
             "## Phase A Fresh Eval",
             "",
-            "| Method | Coverage success | Goal-state success | Mean pose distance | Mean latency |",
+            "| Method | Coverage success | Goal-state success | Mean sampled-state distance | Mean latency |",
             "|---|---:|---:|---:|---:|",
         ]
         for method in ["flat", "hierarchical"]:
@@ -517,7 +517,7 @@ def write_report(summary: dict[str, dict[str, float]], plots: dict[str, Path], m
         "",
         "## Legacy Locked Artifact Re-Score",
         "",
-        "| Method | Coverage success | Goal-state success | Unique episodes | Mean pose distance | Mean latency |",
+        "| Method | Coverage success | Goal-state success | Unique episodes | Mean sampled-state distance | Mean latency |",
         "|---|---:|---:|---:|---:|---:|",
     ]
     for method in ["flat", "hierarchical"]:

@@ -140,14 +140,14 @@ def test_success_metrics_keep_coverage_primary():
     assert metrics["state_dist"] > 0.0
 
 
-def test_goal_state_diagnostic_uses_block_pose_not_agent_position():
+def test_goal_state_diagnostic_uses_sampled_agent_and_block_state():
     goal = np.array([0.0, 0.0, 200.0, 200.0, 0.0], dtype=np.float32)
     current = np.array([500.0, 500.0, 202.0, 199.0, 0.01], dtype=np.float32)
 
     metrics = _goal_state_eval(goal, current)
 
-    assert metrics["goal_state_success"]
-    assert metrics["state_dist"] < 3.0
+    assert not metrics["goal_state_success"]
+    assert metrics["state_dist"] > 700.0
 
 
 def test_goal_state_angle_distance_wraps_periodically():

@@ -147,12 +147,12 @@ class NearestSubgoalResolver:
 
 
 def _goal_state_eval(goal_state: np.ndarray, cur_state: np.ndarray) -> dict[str, float | bool]:
-    block_goal = goal_state[2:5]
-    block_cur = cur_state[2:5]
-    pos_diff = float(np.linalg.norm(block_goal[:2] - block_cur[:2]))
-    angle_delta = float(block_cur[2] - block_goal[2])
+    pose_goal = goal_state[:5]
+    pose_cur = cur_state[:5]
+    pos_diff = float(np.linalg.norm(pose_goal[:4] - pose_cur[:4]))
+    angle_delta = float(pose_cur[4] - pose_goal[4])
     angle_diff = float(abs((angle_delta + np.pi) % (2 * np.pi) - np.pi))
-    pose_delta = np.concatenate([block_goal[:2] - block_cur[:2], np.asarray([angle_diff], dtype=np.float32)])
+    pose_delta = np.concatenate([pose_goal[:4] - pose_cur[:4], np.asarray([angle_diff], dtype=np.float32)])
     return {
         "goal_state_success": bool(pos_diff < 20.0 and angle_diff < (np.pi / 9.0)),
         "state_dist": float(np.linalg.norm(pose_delta)),
