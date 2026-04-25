@@ -758,15 +758,15 @@ def test_release_sanitizer_converts_legacy_success_to_coverage_metric(tmp_path: 
     summary_path = eval_dir / "pusht_online_eval.json"
     records_path = eval_dir / "pusht_online_records.csv"
     payload = {
-        "cache_path": "C:/Users/yiche/old/cache.h5",
-        "checkpoint": "C:/Users/yiche/old/joint.pt",
+        "cache_path": "private/old/cache.h5",
+        "checkpoint": "private/old/joint.pt",
         "flat": {
             "goal_state_success_rate": 1.0,
             "records": [
                 {
                     "success": True,
                     "max_coverage": 0.1,
-                    "video_path": "C:/Users/yiche/old/videos/episode_000.gif",
+                    "video_path": "private/old/videos/episode_000.gif",
                 }
             ],
         },
@@ -776,7 +776,7 @@ def test_release_sanitizer_converts_legacy_success_to_coverage_metric(tmp_path: 
                 {
                     "success": False,
                     "max_coverage": 0.99,
-                    "video_path": "C:/Users/yiche/old/videos/episode_000.gif",
+                    "video_path": "private/old/videos/episode_000.gif",
                 }
             ],
         },
@@ -799,7 +799,7 @@ def test_release_sanitizer_converts_legacy_success_to_coverage_metric(tmp_path: 
             "final_coverage": "0.1",
             "steps_taken": "2",
             "skill_consistency": "0.0",
-            "video_path": "C:/Users/yiche/old/videos/episode_000.gif",
+            "video_path": "private/old/videos/episode_000.gif",
         },
         {
             "method": "hierarchical",
@@ -817,7 +817,7 @@ def test_release_sanitizer_converts_legacy_success_to_coverage_metric(tmp_path: 
             "final_coverage": "0.99",
             "steps_taken": "2",
             "skill_consistency": "0.0",
-            "video_path": "C:/Users/yiche/old/videos/episode_000.gif",
+            "video_path": "private/old/videos/episode_000.gif",
         },
     ]
     summary = {
@@ -851,7 +851,7 @@ def test_release_sanitizer_converts_legacy_success_to_coverage_metric(tmp_path: 
     assert sanitized[0]["coverage_success"] == "False"
     assert sanitized[0]["goal_state_success"] == "True"
     assert "success" not in csv_text.splitlines()[0].split(",")
-    assert "C:/Users/yiche" not in summary_path.read_text(encoding="utf-8")
+    assert "private/old" not in summary_path.read_text(encoding="utf-8")
 
 
 def test_joint_requires_passive_checkpoint_when_low_level_checkpoint_is_set(tmp_path: Path, monkeypatch):

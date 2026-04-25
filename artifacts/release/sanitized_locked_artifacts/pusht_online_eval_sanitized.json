@@ -1,7 +1,7 @@
 {
   "coverage_threshold": 0.95,
   "goal_state_success_is_task_metric": false,
-  "goal_state_success_scope": "trajectory_target_diagnostic",
+  "goal_state_success_scope": "trajectory_full_state_diagnostic",
   "methods": {
     "flat": {
       "coverage_success_rate": 0.0,

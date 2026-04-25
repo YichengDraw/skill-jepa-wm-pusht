@@ -56,7 +56,7 @@ loss:
   low_roll_weight: 1.0
 planner:
   goal_gap: 24
-  num_eval_episodes: 8
+  num_eval_episodes: 100
   max_episode_steps: 32
   high_level_horizon: 4
   high_level_population: 64

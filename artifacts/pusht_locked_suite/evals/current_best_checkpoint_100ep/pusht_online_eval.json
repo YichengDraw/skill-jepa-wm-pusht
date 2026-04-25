@@ -10,7 +10,7 @@
     "final_latent_distance": 0.008878376810171175,
     "goal_state_success_diagnostic_rate": 0.07,
     "goal_state_success_is_task_metric": false,
-    "goal_state_success_scope": "trajectory_target_diagnostic",
+    "goal_state_success_scope": "trajectory_full_state_diagnostic",
     "planning_latency_sec": 0.5641013694595243,
     "records": [
       {
@@ -1925,7 +1925,7 @@
     "final_latent_distance": 0.009620743262348696,
     "goal_state_success_diagnostic_rate": 0.07,
     "goal_state_success_is_task_metric": false,
-    "goal_state_success_scope": "trajectory_target_diagnostic",
+    "goal_state_success_scope": "trajectory_full_state_diagnostic",
     "planning_latency_sec": 0.2493375534135474,
     "records": [
       {

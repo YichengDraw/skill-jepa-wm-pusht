@@ -139,7 +139,7 @@ def render_diagrams() -> None:
         "model_skill": (10.9, 6.9, "SkillIDM / Prior /\nSkillWorldModel"),
         "model_low": (10.9, 5.7, "LowLevelWM"),
         "input_actions": (5.1, 4.5, "Action chunks"),
-        "model_action": (7.0, 4.5, "ActionChunkEncoder"),
+        "model_action": (7.0, 4.5, "ActionChunk\nEncoder"),
         "planner_high": (12.4, 6.9, "HighLevelCEM\nsubgoal z"),
         "planner_resolve": (12.4, 5.7, "Train-split\nnearest s"),
         "planner_low": (10.9, 4.5, "LowLevelCEM\nactions"),

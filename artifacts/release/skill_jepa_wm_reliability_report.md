@@ -12,14 +12,14 @@ Use task-aligned coverage success as the primary Push-T metric. The tracked debu
 | hierarchical | 0.00 | 0.07 | 1 | 264.43 | 0.249s |
 
 The old `success_rate` column measured sampled-trajectory goal-state success, not standard Push-T coverage success.
-Phase A fresh eval: 1 sampled pairs, 1 unique episodes, requested_split=test, actual_split=test, subgoal_scope=train, goal_mode=trajectory, task_success_claim_supported=False, under_sampled=True, provenance_warnings=3.
+Phase A fresh eval: 1 sampled pairs, 1 unique episodes, requested_split=test, actual_split=test, subgoal_scope=train, goal_mode=trajectory, task_success_claim_supported=False, under_sampled=True, provenance_warnings=6.
 
 ## Phase A Fresh Eval
 
 | Method | Coverage diagnostic | Goal-state diagnostic | Mean sampled-state distance | Mean latency |
 |---|---:|---:|---:|---:|
-| flat | 0.00 | 0.00 | 321.15 | 0.300s |
-| hierarchical | 0.00 | 0.00 | 464.56 | 0.184s |
+| flat | 0.00 | 0.00 | 321.15 | 0.561s |
+| hierarchical | 0.00 | 0.00 | 464.56 | 0.227s |
 
 ## Figures
 
