@@ -150,6 +150,38 @@ def resolve_data_seed_config(config: Dict) -> Dict:
     return resolved
 
 
+def assert_checkpoint_code_compatible(
+    checkpoint_payload: Dict,
+    label: str = "Checkpoint",
+    require_code_provenance: bool = True,
+) -> bool:
+    recorded_commit = checkpoint_payload.get("code_commit")
+    has_dirty_field = "code_dirty" in checkpoint_payload
+    if recorded_commit is None or not has_dirty_field:
+        if require_code_provenance:
+            raise RuntimeError(f"{label} does not record code provenance")
+        return False
+    current_commit = git_commit()
+    if current_commit is not None and recorded_commit != current_commit:
+        raise RuntimeError(
+            f"{label} code_commit does not match the current code: "
+            f"recorded={recorded_commit}, current={current_commit}"
+        )
+    current_dirty = git_dirty()
+    recorded_dirty = bool(checkpoint_payload.get("code_dirty"))
+    if current_dirty is not None and recorded_dirty != current_dirty:
+        raise RuntimeError(
+            f"{label} code_dirty does not match the current code: "
+            f"recorded={recorded_dirty}, current={current_dirty}"
+        )
+    if recorded_dirty:
+        current_status_sha = git_status_sha256()
+        recorded_status_sha = checkpoint_payload.get("code_status_sha256")
+        if current_status_sha is not None and recorded_status_sha != current_status_sha:
+            raise RuntimeError(f"{label} code_status_sha256 does not match the current dirty tree")
+    return True
+
+
 def assert_checkpoint_config_compatible(
     checkpoint_payload: Dict,
     runtime_config: Dict,
@@ -157,7 +189,15 @@ def assert_checkpoint_config_compatible(
     sections: tuple[str, ...] = ("encoder", "model"),
     data_keys: tuple[str, ...] = ("cache_path", "projector_ckpt"),
     data_value_keys: tuple[str, ...] = (),
+    check_code: bool = False,
+    require_code_provenance: bool = True,
 ) -> None:
+    if check_code:
+        assert_checkpoint_code_compatible(
+            checkpoint_payload,
+            label=label,
+            require_code_provenance=require_code_provenance,
+        )
     checkpoint_config = checkpoint_payload.get("config", {})
     if not checkpoint_config:
         raise RuntimeError(f"{label} does not record its training config")

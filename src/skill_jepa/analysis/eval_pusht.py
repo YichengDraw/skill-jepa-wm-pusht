@@ -11,7 +11,14 @@ import torch
 
 from skill_jepa.data import EpisodeGoalSampler, cache_metadata, split_episode_ids
 from skill_jepa.planning import HighLevelCEMPlanner, HierarchicalPlanner, LowLevelCEMPlanner
-from skill_jepa.trainers.common import build_all_modules, load_checkpoint, modules_to_device
+from skill_jepa.trainers.common import (
+    LOW_LEVEL_DATA_PROVENANCE_KEYS,
+    assert_checkpoint_code_compatible,
+    assert_checkpoint_config_compatible,
+    build_all_modules,
+    load_checkpoint,
+    modules_to_device,
+)
 from skill_jepa.utils import dump_json, ensure_dir, load_yaml, seed_everything
 
 
@@ -91,6 +98,28 @@ def _load_cache_step(cache_path: str, start_index: int, goal_index: int, device:
     return start, goal
 
 
+def _validate_checkpoint_provenance(cfg: dict, checkpoint_payload: dict) -> None:
+    assert_checkpoint_code_compatible(checkpoint_payload, label="Offline eval checkpoint")
+    assert_checkpoint_config_compatible(
+        checkpoint_payload,
+        cfg,
+        label="Offline eval checkpoint",
+        data_value_keys=LOW_LEVEL_DATA_PROVENANCE_KEYS,
+    )
+
+
+def _rollout_seed(eval_seed: int, episode_idx: int, method_name: str) -> int:
+    method_offsets = {"flat": 0, "hierarchical": 1_000_000}
+    return int(eval_seed) + int(episode_idx) + method_offsets[method_name]
+
+
+def _set_rollout_seed(seed: int) -> None:
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
 @torch.no_grad()
 def _rollout_hierarchical(pair, planners, modules, cache_path, device, num_chunks):
     start, goal = _load_cache_step(cache_path, int(pair["start_index"]), int(pair["goal_index"]), device)
@@ -140,6 +169,26 @@ def _rollout_flat(pair, planners, modules, cache_path, device):
     }
 
 
+def _run_offline_rollouts(goal_pairs, planners, modules, cache_path, device, planner_cfg, eval_seed):
+    flat_records = []
+    hierarchical_records = []
+    for episode_idx, pair in enumerate(goal_pairs):
+        _set_rollout_seed(_rollout_seed(eval_seed, episode_idx, "flat"))
+        flat_records.append(_rollout_flat(pair, planners, modules, cache_path, device))
+        _set_rollout_seed(_rollout_seed(eval_seed, episode_idx, "hierarchical"))
+        hierarchical_records.append(
+            _rollout_hierarchical(
+                pair,
+                planners,
+                modules,
+                cache_path,
+                device,
+                num_chunks=planner_cfg["high_level_horizon"],
+            )
+        )
+    return flat_records, hierarchical_records
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True, type=str)
@@ -153,7 +202,8 @@ def main() -> None:
     device = torch.device(cfg.get("device", "cuda" if torch.cuda.is_available() else "cpu"))
 
     modules = build_all_modules(cfg, cfg["data"]["cache_path"])
-    load_checkpoint(args.checkpoint, modules, strict_modules=True)
+    checkpoint_payload = load_checkpoint(args.checkpoint, modules, strict_modules=True)
+    _validate_checkpoint_provenance(cfg, checkpoint_payload)
     modules_to_device(modules, device)
     for module in modules.values():
         module.eval()
@@ -164,6 +214,8 @@ def main() -> None:
     action_std = torch.from_numpy(meta["action_std"]).float().to(device) if "action_std" in meta else None
 
     planner_cfg = cfg["planner"]
+    split_seed = int(cfg["data"].get("split_seed", cfg["seed"]))
+    eval_seed = int(planner_cfg.get("eval_seed", cfg["seed"]))
     train_indices = _split_step_indices(cfg["data"]["cache_path"], "train", cfg)
     subgoal_resolver = NearestSubgoalResolver(cfg["data"]["cache_path"], device, allowed_indices=train_indices)
     high_level_planner = HighLevelCEMPlanner(
@@ -219,30 +271,27 @@ def main() -> None:
         split="test",
         val_fraction=cfg["data"]["val_fraction"],
         test_fraction=cfg["data"]["test_fraction"],
-        seed=int(cfg["data"].get("split_seed", cfg["seed"])),
+        seed=split_seed,
         goal_gap=planner_cfg["goal_gap"],
     )
     goal_pairs = sampler.sample(
         planner_cfg["num_eval_episodes"],
-        seed=cfg["seed"],
+        seed=eval_seed,
         max_goal_gap=planner_cfg.get("max_episode_steps"),
     )
     if not goal_pairs:
         raise RuntimeError("No eval goal pairs were sampled; check split size, goal_gap, and max_episode_steps")
 
-    summary = {}
-    flat_records = [_rollout_flat(pair, planners, modules, cfg["data"]["cache_path"], device) for pair in goal_pairs]
-    hierarchical_records = [
-        _rollout_hierarchical(
-            pair,
-            planners,
-            modules,
-            cfg["data"]["cache_path"],
-            device,
-            num_chunks=planner_cfg["high_level_horizon"],
-        )
-        for pair in goal_pairs
-    ]
+    summary = {"split_seed": split_seed, "eval_seed": eval_seed}
+    flat_records, hierarchical_records = _run_offline_rollouts(
+        goal_pairs,
+        planners,
+        modules,
+        cfg["data"]["cache_path"],
+        device,
+        planner_cfg,
+        eval_seed,
+    )
     comparison = []
     for flat, hier in zip(flat_records, hierarchical_records):
         comparison.append(float(hier["final_distance"] < flat["final_distance"]))

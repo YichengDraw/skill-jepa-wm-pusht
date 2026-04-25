@@ -118,6 +118,7 @@ def main() -> None:
             cfg,
             label="Passive checkpoint",
             data_value_keys=PASSIVE_DATA_PROVENANCE_KEYS,
+            check_code=True,
         )
     _freeze(modules, ["skill_idm", "skill_wm", "skill_prior", "skill_proj", "effect_proj"])
     modules_to_device(modules, device)

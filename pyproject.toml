@@ -49,8 +49,8 @@ Homepage = "https://github.com/YichengDraw/skill-jepa-wm-pusht"
 Repository = "https://github.com/YichengDraw/skill-jepa-wm-pusht"
 
 [tool.setuptools.packages.find]
-where = ["src", "."]
-include = ["skill_jepa*", "tools*"]
+where = ["src"]
+include = ["skill_jepa*"]
 
 [tool.isort]
 profile = "black"

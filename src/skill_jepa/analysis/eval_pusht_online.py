@@ -25,7 +25,12 @@ from skill_jepa.encoders import FrozenVJEPA2Encoder
 from skill_jepa.modules import StateProjector
 from skill_jepa.planning import HighLevelCEMPlanner, HierarchicalPlanner, LowLevelCEMPlanner, RandomHighLevelPlanner
 from skill_jepa.trainers.common import build_all_modules, git_status_sha256 as _repo_git_status_sha256
-from skill_jepa.trainers.common import load_checkpoint, modules_to_device
+from skill_jepa.trainers.common import (
+    assert_checkpoint_code_compatible,
+    load_checkpoint,
+    modules_to_device,
+    resolve_data_seed_config,
+)
 from skill_jepa.utils import dump_json, ensure_dir, load_yaml, seed_everything
 
 
@@ -674,19 +679,36 @@ def _validate_eval_provenance(cfg: dict, checkpoint_payload: dict) -> dict[str, 
     checkpoint_cfg = checkpoint_payload.get("config", {})
     if not checkpoint_cfg:
         raise RuntimeError("Checkpoint does not record its training config")
+    code_provenance_checked = assert_checkpoint_code_compatible(
+        checkpoint_payload,
+        label="Checkpoint",
+        require_code_provenance=False,
+    )
+    if not code_provenance_checked:
+        warnings.append("Checkpoint does not record code provenance; code compatibility is partially unavailable")
+    checkpoint_cfg = resolve_data_seed_config(checkpoint_cfg)
+    cfg = resolve_data_seed_config(cfg)
     for section in ["encoder", "model"]:
         if checkpoint_cfg.get(section) != cfg.get(section):
             raise RuntimeError(f"Checkpoint {section} config does not match the runtime config")
     checkpoint_data = checkpoint_cfg.get("data", {})
+    runtime_data = cfg.get("data", {})
+    for key in ["val_fraction", "test_fraction", "split_seed", "labeled_fraction", "labeled_seed"]:
+        if key in checkpoint_data or key in runtime_data:
+            if checkpoint_data.get(key) != runtime_data.get(key):
+                raise RuntimeError(
+                    f"Checkpoint data.{key} does not match the runtime config: "
+                    f"recorded={checkpoint_data.get(key)}, current={runtime_data.get(key)}"
+                )
     _assert_same_file_identity(
         "Checkpoint cache_path",
         checkpoint_data.get("cache_path"),
-        cfg.get("data", {}).get("cache_path"),
+        runtime_data.get("cache_path"),
     )
     _assert_same_file_identity(
         "Checkpoint projector_ckpt",
         checkpoint_data.get("projector_ckpt"),
-        cfg.get("data", {}).get("projector_ckpt"),
+        runtime_data.get("projector_ckpt"),
     )
     checkpoint_hashes = checkpoint_payload.get("artifact_hashes", {})
     runtime_hashes = {
@@ -734,6 +756,7 @@ def _validate_eval_provenance(cfg: dict, checkpoint_payload: dict) -> dict[str, 
     return {
         "cache_projector_hash_checked": cache_projector_hash_checked,
         "cache_source_hash_recorded": bool(cache_source_hash),
+        "checkpoint_code_provenance_checked": code_provenance_checked,
         "warnings": warnings,
     }
 

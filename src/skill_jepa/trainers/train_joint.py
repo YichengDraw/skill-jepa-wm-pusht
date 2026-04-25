@@ -141,6 +141,7 @@ def main() -> None:
             cfg,
             label="Passive checkpoint",
             data_value_keys=PASSIVE_DATA_PROVENANCE_KEYS,
+            check_code=True,
         )
     if cfg["training"].get("low_level_checkpoint"):
         if not cfg["training"].get("passive_checkpoint"):
@@ -155,6 +156,7 @@ def main() -> None:
             cfg,
             label="Low-level checkpoint",
             data_value_keys=LOW_LEVEL_DATA_PROVENANCE_KEYS,
+            check_code=True,
         )
         _assert_low_level_passive_lineage(cfg, low_level_payload)
     modules_to_device(modules, device)

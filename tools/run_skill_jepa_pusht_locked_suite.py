@@ -71,6 +71,11 @@ def _path_str(path: Path) -> str:
     return str(path.resolve()).replace("\\", "/")
 
 
+def _repo_path(path: str | Path) -> Path:
+    candidate = Path(path)
+    return candidate if candidate.is_absolute() else ROOT / candidate
+
+
 def _run_logged(command: list[str], log_path: Path) -> None:
     ensure_dir(log_path.parent)
     with open(log_path, "w", encoding="utf-8") as handle:
@@ -164,6 +169,10 @@ def _summary_matches_current(
     for key, expected in (expected_fields or {}).items():
         if summary.get(key) != expected:
             return False
+    for method in _summary_methods(summary):
+        method_summary = summary.get(method)
+        if not isinstance(method_summary, dict) or "coverage_success_rate" not in method_summary:
+            return False
     if not expected_artifacts:
         return True
     hashes = summary.get("hashes", {})
@@ -174,6 +183,17 @@ def _summary_matches_current(
         if hashes.get(f"{key}_sha256") != digest:
             return False
     return True
+
+
+def _summary_methods(summary: dict) -> list[str]:
+    mode = summary.get("mode")
+    if mode == "both":
+        return ["flat", "hierarchical"]
+    if mode == "all":
+        return ["flat", "hierarchical", "random_hierarchical"]
+    if mode in {"flat", "hierarchical", "random_hierarchical"}:
+        return [str(mode)]
+    return []
 
 
 def _write_yaml(path: Path, payload: dict) -> None:
@@ -238,9 +258,9 @@ def _base_scaled_cfg(seed: int, labeled_fraction: float, seed_root: Path) -> dic
 
 
 def _coverage_success_rate(method_summary: dict) -> float:
-    if "coverage_success_rate" in method_summary:
-        return float(method_summary["coverage_success_rate"])
-    return float(method_summary["success_rate"])
+    if "coverage_success_rate" not in method_summary:
+        raise KeyError("coverage_success_rate")
+    return float(method_summary["coverage_success_rate"])
 
 
 def _goal_state_diagnostic_rate(method_summary: dict) -> float:
@@ -248,7 +268,7 @@ def _goal_state_diagnostic_rate(method_summary: dict) -> float:
         return float(method_summary["goal_state_success_diagnostic_rate"])
     if "goal_state_success_rate" in method_summary:
         return float(method_summary["goal_state_success_rate"])
-    return float(method_summary.get("success_rate", 0.0))
+    return 0.0
 
 
 def _eval_specs(artifacts: dict[str, Path]) -> list[tuple[str, Path, Path, str]]:
@@ -319,6 +339,7 @@ def run_debug_reeval(force: bool = False) -> Path:
         expected_artifacts={
             "config": DEBUG_CONFIG,
             "checkpoint": DEBUG_CHECKPOINT,
+            "cache": _repo_path(load_yaml(DEBUG_CONFIG)["data"]["cache_path"]),
             "projector": DEBUG_PROJECTOR,
         },
         expected_fields={
@@ -503,7 +524,6 @@ def evaluate_seed(seed: int, artifacts: dict[str, Path]) -> tuple[list[dict], li
                     "goal_gap": goal_gap,
                     "num_eval_episodes": summary.get("num_eval_episodes", num_eval),
                     "mode": mode,
-                    "success_rate": coverage_rate,
                     "coverage_success_rate": coverage_rate,
                     "goal_state_success_diagnostic_rate": goal_state_rate,
                     "state_dist": method_summary["state_dist"],
@@ -580,8 +600,8 @@ def aggregate_results(rows: list[dict], episode_rows: list[dict]) -> dict[str, P
     summary_df = (
         seed_df.groupby(["config_name", "goal_gap"], as_index=False)
         .agg(
-            success_rate_mean=("success_rate", "mean"),
-            success_rate_std=("success_rate", "std"),
+            coverage_success_rate_mean=("coverage_success_rate", "mean"),
+            coverage_success_rate_std=("coverage_success_rate", "std"),
             state_dist_mean=("state_dist", "mean"),
             state_dist_std=("state_dist", "std"),
             final_latent_distance_mean=("final_latent_distance", "mean"),
@@ -596,7 +616,12 @@ def aggregate_results(rows: list[dict], episode_rows: list[dict]) -> dict[str, P
     summary_csv = REPORT_ROOT / "aggregate_summary.csv"
     summary_df.to_csv(summary_csv, index=False)
 
-    _plot_metric(summary_df, "success_rate", "Success Rate", PLOT_ROOT / "success_rate_by_goal_gap.png")
+    _plot_metric(
+        summary_df,
+        "coverage_success_rate",
+        "Coverage Success Rate",
+        PLOT_ROOT / "coverage_success_rate_by_goal_gap.png",
+    )
     _plot_metric(summary_df, "state_dist", "Mean Sampled-State Distance", PLOT_ROOT / "state_distance_by_goal_gap.png")
 
     decision_path = _write_decision_report(seed_df, summary_df)
@@ -605,7 +630,7 @@ def aggregate_results(rows: list[dict], episode_rows: list[dict]) -> dict[str, P
         "seed_csv": seed_csv,
         "summary_csv": summary_csv,
         "decision_report": decision_path,
-        "success_plot": PLOT_ROOT / "success_rate_by_goal_gap.png",
+        "coverage_success_plot": PLOT_ROOT / "coverage_success_rate_by_goal_gap.png",
         "state_plot": PLOT_ROOT / "state_distance_by_goal_gap.png",
     }
 
@@ -642,7 +667,7 @@ def _seed_delta_support(seed_df: pd.DataFrame, left: str, right: str, goal_gap: 
         right_row = seed_df[
             (seed_df["seed"] == seed) & (seed_df["config_name"] == right) & (seed_df["goal_gap"] == goal_gap)
         ].iloc[0]
-        wins.append(float((left_row["success_rate"] - right_row["success_rate"]) >= min_delta))
+        wins.append(float((left_row["coverage_success_rate"] - right_row["coverage_success_rate"]) >= min_delta))
     return float(sum(wins) / len(wins))
 
 
@@ -653,11 +678,13 @@ def _write_decision_report(seed_df: pd.DataFrame, summary_df: pd.DataFrame) -> P
     low10_24 = _summary_row(summary_df, "labeled_only_flat_10pct", PRIMARY_GOAL_GAP)
     low100_24 = _summary_row(summary_df, "labeled_only_flat_100pct", PRIMARY_GOAL_GAP)
 
-    mean_hier_success_gate = hier24["success_rate_mean"] >= HIER_MIN_SUCCESS
-    mean_hier_flat_gate = (hier24["success_rate_mean"] - flat24["success_rate_mean"]) >= PAIRWISE_MIN_DELTA
-    mean_hier_low10_gate = (hier24["success_rate_mean"] - low10_24["success_rate_mean"]) >= PAIRWISE_MIN_DELTA
-    mean_hier_random_gate = (hier24["success_rate_mean"] - random24["success_rate_mean"]) >= PAIRWISE_MIN_DELTA
-    mean_low100_gate = low100_24["success_rate_mean"] >= LABELED100_MIN_SUCCESS
+    mean_hier_success_gate = hier24["coverage_success_rate_mean"] >= HIER_MIN_SUCCESS
+    mean_hier_flat_gate = (hier24["coverage_success_rate_mean"] - flat24["coverage_success_rate_mean"]) >= PAIRWISE_MIN_DELTA
+    mean_hier_low10_gate = (hier24["coverage_success_rate_mean"] - low10_24["coverage_success_rate_mean"]) >= PAIRWISE_MIN_DELTA
+    mean_hier_random_gate = (
+        hier24["coverage_success_rate_mean"] - random24["coverage_success_rate_mean"]
+    ) >= PAIRWISE_MIN_DELTA
+    mean_low100_gate = low100_24["coverage_success_rate_mean"] >= LABELED100_MIN_SUCCESS
 
     seed_hier_support = float(
         sum(
@@ -666,7 +693,7 @@ def _write_decision_report(seed_df: pd.DataFrame, summary_df: pd.DataFrame) -> P
                     (seed_df["seed"] == seed)
                     & (seed_df["config_name"] == "joint_hier_10pct")
                     & (seed_df["goal_gap"] == PRIMARY_GOAL_GAP)
-                ].iloc[0]["success_rate"]
+                ].iloc[0]["coverage_success_rate"]
                 >= HIER_MIN_SUCCESS
             )
             for seed in SEEDS
@@ -689,7 +716,7 @@ def _write_decision_report(seed_df: pd.DataFrame, summary_df: pd.DataFrame) -> P
                     (seed_df["seed"] == seed)
                     & (seed_df["config_name"] == "labeled_only_flat_100pct")
                     & (seed_df["goal_gap"] == PRIMARY_GOAL_GAP)
-                ].iloc[0]["success_rate"]
+                ].iloc[0]["coverage_success_rate"]
                 >= LABELED100_MIN_SUCCESS
             )
             for seed in SEEDS
@@ -729,31 +756,31 @@ def _write_decision_report(seed_df: pd.DataFrame, summary_df: pd.DataFrame) -> P
         f"Recommendation: **{recommendation}**.",
         "",
         "The locked scaling criterion uses goal_gap 24 as the primary decision point.",
-        "The continue gate requires all requested success-rate thresholds to pass on the mean results and to be supported by at least two of the three seeds.",
+        "The continue gate requires all requested coverage-success thresholds to pass on the mean results and to be supported by at least two of the three seeds.",
         "",
         "## Goal-gap 24 summary",
         "",
-        f"- `joint_hier_10pct`: success {hier24['success_rate_mean']:.4f} ± {hier24['success_rate_std']:.4f}, sampled-state distance {hier24['state_dist_mean']:.2f} ± {hier24['state_dist_std']:.2f}",
-        f"- `joint_flat_10pct`: success {flat24['success_rate_mean']:.4f} ± {flat24['success_rate_std']:.4f}, sampled-state distance {flat24['state_dist_mean']:.2f} ± {flat24['state_dist_std']:.2f}",
-        f"- `random_skill_hier_10pct`: success {random24['success_rate_mean']:.4f} ± {random24['success_rate_std']:.4f}, sampled-state distance {random24['state_dist_mean']:.2f} ± {random24['state_dist_std']:.2f}",
-        f"- `labeled_only_flat_10pct`: success {low10_24['success_rate_mean']:.4f} ± {low10_24['success_rate_std']:.4f}, sampled-state distance {low10_24['state_dist_mean']:.2f} ± {low10_24['state_dist_std']:.2f}",
-        f"- `labeled_only_flat_100pct`: success {low100_24['success_rate_mean']:.4f} ± {low100_24['success_rate_std']:.4f}, sampled-state distance {low100_24['state_dist_mean']:.2f} ± {low100_24['state_dist_std']:.2f}",
+        f"- `joint_hier_10pct`: coverage success {hier24['coverage_success_rate_mean']:.4f} ± {hier24['coverage_success_rate_std']:.4f}, sampled-state distance {hier24['state_dist_mean']:.2f} ± {hier24['state_dist_std']:.2f}",
+        f"- `joint_flat_10pct`: coverage success {flat24['coverage_success_rate_mean']:.4f} ± {flat24['coverage_success_rate_std']:.4f}, sampled-state distance {flat24['state_dist_mean']:.2f} ± {flat24['state_dist_std']:.2f}",
+        f"- `random_skill_hier_10pct`: coverage success {random24['coverage_success_rate_mean']:.4f} ± {random24['coverage_success_rate_std']:.4f}, sampled-state distance {random24['state_dist_mean']:.2f} ± {random24['state_dist_std']:.2f}",
+        f"- `labeled_only_flat_10pct`: coverage success {low10_24['coverage_success_rate_mean']:.4f} ± {low10_24['coverage_success_rate_std']:.4f}, sampled-state distance {low10_24['state_dist_mean']:.2f} ± {low10_24['state_dist_std']:.2f}",
+        f"- `labeled_only_flat_100pct`: coverage success {low100_24['coverage_success_rate_mean']:.4f} ± {low100_24['coverage_success_rate_std']:.4f}, sampled-state distance {low100_24['state_dist_mean']:.2f} ± {low100_24['state_dist_std']:.2f}",
         "",
         "## Seed-level robustness",
         "",
-        f"- `joint_hier_10pct` success >= 15% support rate: {seed_hier_support:.3f}",
+        f"- `joint_hier_10pct` coverage success >= 15% support rate: {seed_hier_support:.3f}",
         f"- `joint_hier_10pct - joint_flat_10pct` >= 5pp support rate: {seed_hier_flat_support:.3f}",
         f"- `joint_hier_10pct - labeled_only_flat_10pct` >= 5pp support rate: {seed_hier_low10_support:.3f}",
         f"- `joint_hier_10pct - random_skill_hier_10pct` >= 5pp support rate: {seed_hier_random_support:.3f}",
-        f"- `labeled_only_flat_100pct` success >= 10% support rate: {seed_low100_support:.3f}",
+        f"- `labeled_only_flat_100pct` coverage success >= 10% support rate: {seed_low100_support:.3f}",
         "",
         "## Decision basis",
         "",
-        f"- Mean `joint_hier_10pct` success >= 15%: `{mean_hier_success_gate}`",
+        f"- Mean `joint_hier_10pct` coverage success >= 15%: `{mean_hier_success_gate}`",
         f"- Mean `joint_hier_10pct - joint_flat_10pct` >= 5pp: `{mean_hier_flat_gate}`",
         f"- Mean `joint_hier_10pct - labeled_only_flat_10pct` >= 5pp: `{mean_hier_low10_gate}`",
         f"- Mean `joint_hier_10pct - random_skill_hier_10pct` >= 5pp: `{mean_hier_random_gate}`",
-        f"- Mean `labeled_only_flat_100pct` success >= 10%: `{mean_low100_gate}`",
+        f"- Mean `labeled_only_flat_100pct` coverage success >= 10%: `{mean_low100_gate}`",
         f"- 2/3 seed support across all gates: `{seed_support_gate}`",
         f"- Continue threshold met: `{recommendation == 'continue'}`",
         "",
@@ -819,7 +846,6 @@ def _collect_existing_results(seeds: list[int]) -> tuple[list[dict], list[dict]]
                     "goal_gap": goal_gap,
                     "num_eval_episodes": summary["num_eval_episodes"],
                     "mode": mode,
-                    "success_rate": coverage_rate,
                     "coverage_success_rate": coverage_rate,
                     "goal_state_success_diagnostic_rate": goal_state_rate,
                     "state_dist": method_summary["state_dist"],

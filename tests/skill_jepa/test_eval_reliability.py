@@ -30,9 +30,11 @@ from skill_jepa.analysis import eval_pusht as offline_eval
 from skill_jepa.analysis import eval_pusht_online as online_eval
 from skill_jepa.data import EpisodeGoalSampler, FeatureSequenceDataset, split_episode_ids
 from skill_jepa.envs import PushTEnv
+from skill_jepa.trainers import common as trainer_common
 from skill_jepa.trainers.common import (
     LOW_LEVEL_DATA_PROVENANCE_KEYS,
     PASSIVE_DATA_PROVENANCE_KEYS,
+    assert_checkpoint_code_compatible,
     assert_checkpoint_config_compatible,
     load_checkpoint,
     load_checkpoint_subset,
@@ -260,6 +262,88 @@ def test_offline_train_scoped_subgoal_indices_use_data_split_seed(tmp_path: Path
     assert actual_episode_ids != wrong_episode_ids
 
 
+def test_offline_eval_provenance_rejects_checkpoint_split_drift(tmp_path: Path, monkeypatch):
+    cache = tmp_path / "cache.h5"
+    projector = tmp_path / "projector.pt"
+    cache.write_bytes(b"cache")
+    projector.write_bytes(b"projector")
+    cfg = {
+        "seed": 0,
+        "data": {
+            "cache_path": str(cache),
+            "projector_ckpt": str(projector),
+            "labeled_fraction": 0.1,
+            "val_fraction": 0.2,
+            "test_fraction": 0.0,
+            "split_seed": 0,
+            "labeled_seed": 17,
+        },
+        "encoder": {"model_id": "encoder"},
+        "model": {"hidden_dim": 8},
+    }
+    payload = {
+        "code_commit": "abc123",
+        "code_dirty": False,
+        "config": {
+            **cfg,
+            "data": {**cfg["data"], "split_seed": 99},
+        },
+        "artifact_hashes": {
+            "data.cache_path": hashlib.sha256(b"cache").hexdigest(),
+            "data.projector_ckpt": hashlib.sha256(b"projector").hexdigest(),
+        },
+    }
+    monkeypatch.setattr(trainer_common, "git_commit", lambda: "abc123")
+    monkeypatch.setattr(trainer_common, "git_dirty", lambda: False)
+
+    with pytest.raises(RuntimeError, match="data.split_seed"):
+        offline_eval._validate_checkpoint_provenance(cfg, payload)
+
+
+def test_offline_rollouts_reseed_per_episode_and_method(monkeypatch):
+    seen: list[tuple[str, int]] = []
+
+    def fake_flat(pair, planners, modules, cache_path, device):
+        seen.append(("flat", int(torch.initial_seed())))
+        return {
+            "start_distance": 1.0,
+            "final_distance": 1.0,
+            "improvement": 0.0,
+            "planning_latency_sec": 0.0,
+            "skill_consistency": 0.0,
+        }
+
+    def fake_hierarchical(pair, planners, modules, cache_path, device, num_chunks):
+        seen.append(("hierarchical", int(torch.initial_seed())))
+        return {
+            "start_distance": 1.0,
+            "final_distance": 1.0,
+            "improvement": 0.0,
+            "planning_latency_sec": 0.0,
+            "skill_consistency": 0.0,
+        }
+
+    monkeypatch.setattr(offline_eval, "_rollout_flat", fake_flat)
+    monkeypatch.setattr(offline_eval, "_rollout_hierarchical", fake_hierarchical)
+
+    offline_eval._run_offline_rollouts(
+        goal_pairs=[{"episode_id": 0}, {"episode_id": 1}],
+        planners={},
+        modules={},
+        cache_path="cache.h5",
+        device=torch.device("cpu"),
+        planner_cfg={"high_level_horizon": 4},
+        eval_seed=123,
+    )
+
+    assert seen == [
+        ("flat", 123),
+        ("hierarchical", 1_000_123),
+        ("flat", 124),
+        ("hierarchical", 1_000_124),
+    ]
+
+
 def test_task_goal_pool_rejects_cache_without_train_success_states(tmp_path: Path):
     cache_path = tmp_path / "cache.h5"
     _write_goal_cache(cache_path, np.array([4, 4, 4], dtype=np.int32))
@@ -472,12 +556,13 @@ def test_package_discovery_keeps_runtime_import_roots():
 
     include = set(pyproject["tool"]["setuptools"]["packages"]["find"]["include"])
     where = pyproject["tool"]["setuptools"]["packages"]["find"]["where"]
-    assert where == ["src", "."]
-    assert include == {"skill_jepa*", "tools*"}
+    assert where == ["src"]
+    assert include == {"skill_jepa*"}
     manifest = (Path(__file__).resolve().parents[2] / "MANIFEST.in").read_text(encoding="utf-8")
     assert "recursive-include configs *.yaml" in manifest
     assert "recursive-include docs *.md *.mmd *.png *.svg" in manifest
     assert "recursive-include artifacts *.csv *.gif *.json *.md *.pdf *.png *.svg *.yaml" in manifest
+    assert "recursive-include tools *.py" in manifest
 
 
 def test_pusht_env_is_packaged_under_skill_jepa_namespace():
@@ -768,6 +853,33 @@ def test_checkpoint_config_compatibility_resolves_implicit_split_seed_from_top_l
         )
 
 
+def test_checkpoint_code_compatibility_rejects_commit_mismatch(monkeypatch):
+    monkeypatch.setattr(trainer_common, "git_commit", lambda: "current")
+    monkeypatch.setattr(trainer_common, "git_dirty", lambda: False)
+
+    with pytest.raises(RuntimeError, match="code_commit"):
+        assert_checkpoint_code_compatible(
+            {"code_commit": "old", "code_dirty": False},
+            label="Parent checkpoint",
+        )
+
+
+def test_checkpoint_config_compatibility_can_enforce_code_provenance(monkeypatch):
+    monkeypatch.setattr(trainer_common, "git_commit", lambda: "current")
+    monkeypatch.setattr(trainer_common, "git_dirty", lambda: False)
+    cfg = {"data": {}, "encoder": {"model_id": "encoder"}, "model": {"hidden_dim": 8}}
+    payload = {
+        "code_commit": "current",
+        "code_dirty": False,
+        "config": cfg,
+        "artifact_hashes": {},
+    }
+
+    assert_checkpoint_config_compatible(payload, cfg, check_code=True)
+    with pytest.raises(RuntimeError, match="code provenance"):
+        assert_checkpoint_config_compatible({"config": cfg}, cfg, check_code=True)
+
+
 def test_passive_checkpoint_compatibility_allows_label_subset_drift_but_low_level_rejects_it(tmp_path: Path):
     cache = tmp_path / "cache.h5"
     projector = tmp_path / "projector.pt"
@@ -974,6 +1086,68 @@ def test_locked_suite_summary_freshness_checks_deterministic_timing_field(tmp_pa
     )
 
 
+def test_locked_suite_freshness_rejects_legacy_success_rate_only_summary(tmp_path: Path, monkeypatch):
+    checkpoint = tmp_path / "checkpoint.pt"
+    checkpoint.write_bytes(b"current")
+    summary_path = tmp_path / "pusht_online_eval.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "code_commit": "abc123",
+                "code_dirty": False,
+                "goal_mode": "task",
+                "mode": "hierarchical",
+                "provenance": {"warnings": []},
+                "hashes": {"checkpoint_sha256": hashlib.sha256(b"current").hexdigest()},
+                "hierarchical": {"success_rate": 1.0},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(locked_suite, "_git_commit", lambda: "abc123")
+    monkeypatch.setattr(locked_suite, "_git_dirty", lambda: False)
+
+    assert not locked_suite._summary_matches_current(
+        summary_path,
+        expected_goal_mode="task",
+        expected_artifacts={"checkpoint": checkpoint},
+        expected_fields={"mode": "hierarchical"},
+    )
+
+
+def test_locked_suite_debug_reeval_freshness_checks_cache_hash(tmp_path: Path, monkeypatch):
+    config = tmp_path / "debug.yaml"
+    checkpoint = tmp_path / "joint.pt"
+    projector = tmp_path / "projector.pt"
+    cache = tmp_path / "cache.h5"
+    for path in [checkpoint, projector, cache]:
+        path.write_bytes(b"artifact")
+    config.write_text(
+        "\n".join(
+            [
+                "data:",
+                f"  cache_path: {cache.as_posix()}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    seen: dict[str, Path] = {}
+
+    def fake_matches(summary_path, expected_goal_mode, expected_artifacts, expected_fields):
+        seen.update(expected_artifacts)
+        return True
+
+    monkeypatch.setattr(locked_suite, "EVAL_ROOT", tmp_path / "evals")
+    monkeypatch.setattr(locked_suite, "DEBUG_CONFIG", config)
+    monkeypatch.setattr(locked_suite, "DEBUG_CHECKPOINT", checkpoint)
+    monkeypatch.setattr(locked_suite, "DEBUG_PROJECTOR", projector)
+    monkeypatch.setattr(locked_suite, "_summary_matches_current", fake_matches)
+
+    locked_suite.run_debug_reeval(force=False)
+
+    assert seen["cache"] == cache
+
+
 def test_locked_suite_checkpoint_reuse_rejects_commit_config_and_lineage_drift(tmp_path: Path, monkeypatch):
     cache = tmp_path / "cache.h5"
     projector = tmp_path / "projector.pt"
@@ -1082,6 +1256,59 @@ def test_locked_suite_aggregate_only_rejects_stale_existing_eval(tmp_path: Path,
 
     with pytest.raises(RuntimeError, match="stale or unverifiable"):
         locked_suite._collect_existing_results([0])
+
+
+def test_locked_suite_aggregate_outputs_use_coverage_success_names(tmp_path: Path, monkeypatch):
+    report_root = tmp_path / "reports"
+    plot_root = tmp_path / "plots"
+    monkeypatch.setattr(locked_suite, "REPORT_ROOT", report_root)
+    monkeypatch.setattr(locked_suite, "PLOT_ROOT", plot_root)
+    monkeypatch.setattr(locked_suite, "SEEDS", [0])
+
+    rows = []
+    episode_rows = []
+    for idx, config_name in enumerate(locked_suite.CONFIG_ORDER):
+        rows.append(
+            {
+                "seed": 0,
+                "config_name": config_name,
+                "goal_gap": locked_suite.PRIMARY_GOAL_GAP,
+                "num_eval_episodes": 10,
+                "mode": "hierarchical" if "hier" in config_name else "flat",
+                "coverage_success_rate": float(idx) / 10.0,
+                "goal_state_success_diagnostic_rate": 0.0,
+                "state_dist": float(idx),
+                "final_latent_distance": float(idx),
+                "planning_latency_sec": 0.01,
+                "skill_consistency": 0.0,
+                "summary_path": f"eval/{config_name}.json",
+            }
+        )
+        episode_rows.append(
+            {
+                "seed": 0,
+                "config_name": config_name,
+                "goal_gap": locked_suite.PRIMARY_GOAL_GAP,
+                "method": "hierarchical" if "hier" in config_name else "flat",
+                "episode_idx": 0,
+                "coverage_success": False,
+            }
+        )
+
+    paths = locked_suite.aggregate_results(rows, episode_rows)
+    seed_header = paths["seed_csv"].read_text(encoding="utf-8").splitlines()[0].split(",")
+    summary_header = paths["summary_csv"].read_text(encoding="utf-8").splitlines()[0].split(",")
+    report_text = paths["decision_report"].read_text(encoding="utf-8")
+
+    assert "coverage_success_rate" in seed_header
+    assert "success_rate" not in seed_header
+    assert "coverage_success_rate_mean" in summary_header
+    assert "coverage_success_rate_std" in summary_header
+    assert "success_rate_mean" not in summary_header
+    assert "coverage-success thresholds" in report_text
+    assert "coverage_success_plot" in paths
+    assert "success_plot" not in paths
+    assert paths["coverage_success_plot"].exists()
 
 
 def test_release_sanitizer_converts_legacy_success_to_coverage_metric(tmp_path: Path, monkeypatch):
@@ -1427,6 +1654,89 @@ def test_eval_provenance_rejects_checkpoint_model_config_mismatch(tmp_path: Path
 
     with pytest.raises(RuntimeError, match="model config"):
         _validate_eval_provenance(cfg, checkpoint_payload)
+
+
+def test_eval_provenance_rejects_checkpoint_split_provenance_mismatch(tmp_path: Path):
+    cache_path = tmp_path / "cache.h5"
+    projector = tmp_path / "projector.pt"
+    projector.write_bytes(b"projector")
+    with h5py.File(cache_path, "w") as handle:
+        handle.attrs["projector_ckpt"] = str(projector)
+    cfg = {
+        "seed": 7,
+        "data": {
+            "cache_path": str(cache_path),
+            "projector_ckpt": str(projector),
+            "val_fraction": 0.1,
+            "test_fraction": 0.1,
+            "labeled_fraction": 0.1,
+        },
+        "encoder": {"model_id": "encoder", "state_dim": 4},
+        "model": {"hidden_dim": 8},
+    }
+    checkpoint_payload = {
+        "config": {
+            "seed": 11,
+            "data": {
+                "cache_path": str(cache_path),
+                "projector_ckpt": str(projector),
+                "val_fraction": 0.1,
+                "test_fraction": 0.1,
+                "labeled_fraction": 0.1,
+            },
+            "encoder": cfg["encoder"],
+            "model": cfg["model"],
+        }
+    }
+
+    with pytest.raises(RuntimeError, match="data.split_seed"):
+        _validate_eval_provenance(cfg, checkpoint_payload)
+
+
+def test_eval_provenance_accepts_implicit_matching_split_provenance(tmp_path: Path):
+    cache_path = tmp_path / "cache.h5"
+    projector = tmp_path / "projector.pt"
+    projector.write_bytes(b"projector")
+    with h5py.File(cache_path, "w") as handle:
+        handle.attrs["projector_ckpt"] = str(projector)
+        handle.attrs["projector_ckpt_sha256"] = hashlib.sha256(b"projector").hexdigest()
+        handle.attrs["encoder_model_id"] = "encoder"
+        handle.attrs["encoder_state_dim"] = 4
+        handle.attrs["encoder_pool_grid"] = 2
+    cfg = {
+        "seed": 7,
+        "data": {
+            "cache_path": str(cache_path),
+            "projector_ckpt": str(projector),
+            "val_fraction": 0.1,
+            "test_fraction": 0.1,
+            "labeled_fraction": 0.1,
+        },
+        "encoder": {"model_id": "encoder", "state_dim": 4, "pool_grid": 2},
+        "model": {"hidden_dim": 8},
+    }
+    checkpoint_payload = {
+        "config": {
+            "seed": 7,
+            "data": {
+                "cache_path": str(cache_path),
+                "projector_ckpt": str(projector),
+                "val_fraction": 0.1,
+                "test_fraction": 0.1,
+                "labeled_fraction": 0.1,
+            },
+            "encoder": cfg["encoder"],
+            "model": cfg["model"],
+        },
+        "artifact_hashes": {
+            "data.cache_path": hashlib.sha256(cache_path.read_bytes()).hexdigest(),
+            "data.projector_ckpt": hashlib.sha256(b"projector").hexdigest(),
+        },
+    }
+
+    summary = _validate_eval_provenance(cfg, checkpoint_payload)
+
+    assert summary["cache_projector_hash_checked"]
 
 
 def test_eval_provenance_rejects_checkpoint_projector_hash_mismatch(tmp_path: Path):
