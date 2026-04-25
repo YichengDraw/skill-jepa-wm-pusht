@@ -2,7 +2,7 @@
 
 ## Verdict
 
-Use coverage success as the primary Push-T metric. The legacy locked artifact does not support a standard Push-T success claim: both flat and hierarchical have 0.00 coverage success.
+Use task-aligned coverage success as the primary Push-T metric. The tracked debug and legacy locked artifacts are trajectory-goal diagnostics and do not support a standard Push-T task-success claim.
 
 ## Legacy Locked Artifact Re-Score
 
@@ -11,15 +11,15 @@ Use coverage success as the primary Push-T metric. The legacy locked artifact do
 | flat | 0.00 | 0.07 | 1 | 355.30 | 0.564s |
 | hierarchical | 0.00 | 0.07 | 1 | 264.43 | 0.249s |
 
-The old `success_rate` column measured pose-to-sampled-goal success, not standard Push-T coverage success.
-Phase A fresh eval: 1 sampled pairs, 1 unique episodes, requested_split=test, actual_split=test, subgoal_scope=train.
+The old `success_rate` column measured sampled-trajectory goal-state success, not standard Push-T coverage success.
+Phase A fresh eval: 1 sampled pairs, 1 unique episodes, requested_split=test, actual_split=test, subgoal_scope=train, goal_mode=trajectory, task_success_claim_supported=False.
 
 ## Phase A Fresh Eval
 
-| Method | Coverage success | Goal-state success | Mean sampled-state distance | Mean latency |
+| Method | Fixed-task coverage diagnostic | Goal-state success | Mean sampled-state distance | Mean latency |
 |---|---:|---:|---:|---:|
-| flat | 0.00 | 0.00 | 321.15 | 0.292s |
-| hierarchical | 0.00 | 0.00 | 464.56 | 0.129s |
+| flat | 0.00 | 0.00 | 321.15 | 0.319s |
+| hierarchical | 0.00 | 0.00 | 464.56 | 0.131s |
 
 ## Figures
 

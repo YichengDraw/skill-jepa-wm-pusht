@@ -8,9 +8,12 @@ flowchart TD
   eval --> flat["Flat planner"]
   eval --> hier["Hierarchical planner"]
   eval --> random["Random-skill hierarchy ablation"]
-  flat --> metrics["Coverage-first metrics"]
-  hier --> metrics
-  random --> metrics
+  flat --> gate["Goal-mode gate"]
+  hier --> gate
+  random --> gate
+  gate --> metrics["Task-aligned coverage metrics"]
+  gate --> diag["Trajectory diagnostics: no task claim"]
   metrics --> plots["Plots and rollout montage"]
+  diag --> plots
   plots --> report["Reliability report"]
   report --> release["Clean GitHub release"]

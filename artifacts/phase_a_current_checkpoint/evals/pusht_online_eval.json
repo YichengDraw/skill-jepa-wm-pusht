@@ -3,7 +3,7 @@
   "allow_split_fallback": false,
   "cache_path": "../jepa-wms/outputs/skill_jepa/pusht_debug/cache/pusht_vjepa2_cache.h5",
   "checkpoint": "../jepa-wms/outputs/skill_jepa/pusht_debug/joint/joint_best.pt",
-  "code_commit": "fdbd070c52606ca5725c613e8eb9697b8f7a508f",
+  "code_commit": "724bb0081d2840f532c4015cfa01feb388192dee",
   "coverage_threshold": 0.95,
   "eval_split": "test",
   "execute_actions_per_plan": 4,
@@ -11,7 +11,7 @@
     "coverage_success_rate": 0.0,
     "final_latent_distance": 0.01786930114030838,
     "goal_state_success_rate": 0.0,
-    "planning_latency_sec": 0.29219525001826696,
+    "planning_latency_sec": 0.31880156250554137,
     "records": [
       {
         "coverage_success": false,
@@ -19,10 +19,12 @@
         "episode_idx": 0,
         "final_coverage": 0.17450593355568816,
         "final_latent_distance": 0.01786930114030838,
+        "goal_episode_id": 0,
         "goal_index": 78,
+        "goal_mode": "trajectory",
         "goal_state_success": false,
         "max_coverage": 0.17450593355568816,
-        "planning_latency_sec": 0.29219525001826696,
+        "planning_latency_sec": 0.31880156250554137,
         "sampled_goal_gap": 26,
         "skill_consistency": 0.0,
         "start_index": 52,
@@ -39,6 +41,7 @@
     "unique_episode_count": 1
   },
   "goal_gap": 24,
+  "goal_mode": "trajectory",
   "hashes": {
     "cache_sha256": "d40b9af57565fcb10b7300caf8d7aa71f6809ac9d496582bd793af0d27e73f41",
     "checkpoint_sha256": "7635349101c6277e313538db1b5571c3d74a0dc3f3bbe6e8e9399d3226aef5c9",
@@ -49,7 +52,7 @@
     "coverage_success_rate": 0.0,
     "final_latent_distance": 0.01786930114030838,
     "goal_state_success_rate": 0.0,
-    "planning_latency_sec": 0.12933921249350533,
+    "planning_latency_sec": 0.13076061249012128,
     "records": [
       {
         "coverage_success": false,
@@ -57,10 +60,12 @@
         "episode_idx": 0,
         "final_coverage": 0.17450593355568816,
         "final_latent_distance": 0.01786930114030838,
+        "goal_episode_id": 0,
         "goal_index": 78,
+        "goal_mode": "trajectory",
         "goal_state_success": false,
         "max_coverage": 0.17450593355568816,
-        "planning_latency_sec": 0.12933921249350533,
+        "planning_latency_sec": 0.13076061249012128,
         "sampled_goal_gap": 26,
         "skill_consistency": 0.18830398935824633,
         "start_index": 52,
@@ -76,7 +81,9 @@
     "success_rate": 0.0,
     "unique_episode_count": 1
   },
-  "hierarchical_better_rate": 0.0,
+  "hierarchical_coverage_better_rate": 0.0,
+  "hierarchical_goal_state_better_rate": 0.0,
+  "hierarchical_sampled_state_better_rate": 0.0,
   "max_episode_steps": 32,
   "mode": "both",
   "num_eval_episodes": 1,
@@ -89,5 +96,11 @@
   "requested_eval_split": "test",
   "requested_num_eval_episodes": 100,
   "subgoal_scope": "train",
+  "task_goal_pool_mean_coverage": null,
+  "task_goal_pool_min_coverage": null,
+  "task_goal_pool_size": 0,
+  "task_goal_split": null,
+  "task_goal_tail_steps": null,
+  "task_success_claim_supported": false,
   "unique_episode_count": 1
 }

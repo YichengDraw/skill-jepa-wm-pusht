@@ -254,7 +254,7 @@ def main() -> None:
             "skill_consistency": float(np.mean([record["skill_consistency"] for record in records])) if records else 0.0,
             "records": records,
         }
-    summary["hierarchical_better_rate"] = float(np.mean(comparison)) if comparison else 0.0
+    summary["hierarchical_sampled_state_better_rate"] = float(np.mean(comparison)) if comparison else 0.0
 
     dump_json(out_dir / "pusht_planning_eval.json", summary)
 

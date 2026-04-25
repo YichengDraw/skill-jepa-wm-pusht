@@ -62,10 +62,13 @@ EXPERIMENT_FLOW_MMD = """flowchart TD
   eval --> flat["Flat planner"]
   eval --> hier["Hierarchical planner"]
   eval --> random["Random-skill hierarchy ablation"]
-  flat --> metrics["Coverage-first metrics"]
-  hier --> metrics
-  random --> metrics
+  flat --> gate["Goal-mode gate"]
+  hier --> gate
+  random --> gate
+  gate --> metrics["Task-aligned coverage metrics"]
+  gate --> diag["Trajectory diagnostics: no task claim"]
   metrics --> plots["Plots and rollout montage"]
+  diag --> plots
   plots --> report["Reliability report"]
   report --> release["Clean GitHub release"]
 """
@@ -81,7 +84,7 @@ def draw_flow(title: str, nodes: dict[str, tuple[float, float, str]], edges: lis
     ensure_dir(out_base.parent)
     fig, ax = plt.subplots(figsize=(13.5, 7.4))
     ax.set_axis_off()
-    ax.set_xlim(-0.6, 13.8)
+    ax.set_xlim(-0.6, 14.8)
     ax.set_ylim(0, 7.4)
     colors = {
         "input": "#eef4f7",
@@ -171,7 +174,9 @@ def render_diagrams() -> None:
         "planner_flat": (10.9, 6.8, "Flat"),
         "planner_hier": (10.9, 5.9, "Hierarchical"),
         "planner_random": (10.9, 5.0, "Random-skill\nhierarchy"),
-        "eval_metrics": (12.4, 5.9, "Coverage-first\nmetrics"),
+        "eval_gate": (12.2, 5.9, "Goal-mode\ngate"),
+        "eval_metrics": (13.6, 6.6, "Task-aligned\ncoverage metrics"),
+        "eval_diag": (13.6, 5.2, "Trajectory diagnostics\nno task claim"),
         "eval_plots": (9.1, 3.7, "Plots and\nmontage"),
         "eval_report": (7.2, 3.7, "Reliability\nreport"),
         "eval_release": (5.2, 3.7, "Clean GitHub\nrelease"),
@@ -186,10 +191,13 @@ def render_diagrams() -> None:
         ("eval_online", "planner_flat"),
         ("eval_online", "planner_hier"),
         ("eval_online", "planner_random"),
-        ("planner_flat", "eval_metrics"),
-        ("planner_hier", "eval_metrics"),
-        ("planner_random", "eval_metrics"),
+        ("planner_flat", "eval_gate"),
+        ("planner_hier", "eval_gate"),
+        ("planner_random", "eval_gate"),
+        ("eval_gate", "eval_metrics"),
+        ("eval_gate", "eval_diag"),
         ("eval_metrics", "eval_plots"),
+        ("eval_diag", "eval_plots"),
         ("eval_plots", "eval_report"),
         ("eval_report", "eval_release"),
     ]

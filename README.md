@@ -142,9 +142,9 @@ The key runtime path is: raw Push-T HDF5 frames/actions/states -> causal two-fra
 From `artifacts/pusht_debug/EXPERIMENT_STATUS.md`:
 
 - Best debug setting: `K=4`, `goal_gap=24`, `max_episode_steps=32`, `execute_actions_per_plan=4`
-- Debug hierarchical success: `0.25`
-- Debug flat success: `0.00`
-- Debug labeled-only flat baseline success: `0.00`
+- Debug hierarchical sampled-goal success: `0.25`
+- Debug flat sampled-goal success: `0.00`
+- Debug labeled-only flat baseline sampled-goal success: `0.00`
 
 These debug numbers are historical goal-state-reaching diagnostics. They are not standard Push-T coverage-success evidence.
 
@@ -159,7 +159,7 @@ From `artifacts/release/skill_jepa_wm_reliability_report.md`:
 
 Interpretation:
 
-- The old `success_rate` column measured pose-to-sampled-goal success, not standard Push-T coverage success.
+- The old `success_rate` column measured sampled-trajectory goal-state success, not standard Push-T coverage success.
 - The legacy locked artifact has repeated sampled pairs from one unique episode.
 - Hierarchy improves sampled-state distance and planning latency in that artifact.
 - The artifact uses trajectory-goal planning targets. It does not support a standard Push-T task-success claim.
@@ -170,8 +170,8 @@ The corrected evaluator was rerun against the available sibling debug cache/chec
 
 | Method | Fixed-task coverage diagnostic | Goal-state success | Mean sampled-state distance | Mean planning latency |
 |---|---:|---:|---:|---:|
-| Hierarchical | 0.00 | 0.00 | 464.56 | 0.129 s |
-| Flat | 0.00 | 0.00 | 321.15 | 0.292 s |
+| Hierarchical | 0.00 | 0.00 | 464.56 | 0.131 s |
+| Flat | 0.00 | 0.00 | 321.15 | 0.319 s |
 
 ## Tracked Artifacts
 

@@ -3829,7 +3829,7 @@
     "success_rate": 0.0,
     "unique_episode_count": 1
   },
-  "hierarchical_better_rate": 0.57,
+  "hierarchical_sampled_state_better_rate": 0.57,
   "max_episode_steps": 32,
   "mode": "both",
   "num_eval_episodes": 100
