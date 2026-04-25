@@ -1,8 +1,9 @@
 {
   "allow_replacement": false,
+  "allow_split_fallback": false,
   "cache_path": "../jepa-wms/outputs/skill_jepa/pusht_debug/cache/pusht_vjepa2_cache.h5",
   "checkpoint": "../jepa-wms/outputs/skill_jepa/pusht_debug/joint/joint_best.pt",
-  "code_commit": "1f5e1b5529d142124ccc1689a0605000d5f6df10",
+  "code_commit": "fdbd070c52606ca5725c613e8eb9697b8f7a508f",
   "coverage_threshold": 0.95,
   "eval_split": "test",
   "execute_actions_per_plan": 4,
@@ -10,7 +11,7 @@
     "coverage_success_rate": 0.0,
     "final_latent_distance": 0.01786930114030838,
     "goal_state_success_rate": 0.0,
-    "planning_latency_sec": 0.6057743124838453,
+    "planning_latency_sec": 0.29219525001826696,
     "records": [
       {
         "coverage_success": false,
@@ -21,7 +22,7 @@
         "goal_index": 78,
         "goal_state_success": false,
         "max_coverage": 0.17450593355568816,
-        "planning_latency_sec": 0.6057743124838453,
+        "planning_latency_sec": 0.29219525001826696,
         "sampled_goal_gap": 26,
         "skill_consistency": 0.0,
         "start_index": 52,
@@ -48,7 +49,7 @@
     "coverage_success_rate": 0.0,
     "final_latent_distance": 0.01786930114030838,
     "goal_state_success_rate": 0.0,
-    "planning_latency_sec": 0.25361357496876735,
+    "planning_latency_sec": 0.12933921249350533,
     "records": [
       {
         "coverage_success": false,
@@ -59,7 +60,7 @@
         "goal_index": 78,
         "goal_state_success": false,
         "max_coverage": 0.17450593355568816,
-        "planning_latency_sec": 0.25361357496876735,
+        "planning_latency_sec": 0.12933921249350533,
         "sampled_goal_gap": 26,
         "skill_consistency": 0.18830398935824633,
         "start_index": 52,
@@ -85,6 +86,7 @@
     "config": "artifacts/phase_a_current_checkpoint/evals/phase_a_external_debug.yaml",
     "projector": "../jepa-wms/outputs/skill_jepa/pusht_debug/cache/state_projector.pt"
   },
+  "requested_eval_split": "test",
   "requested_num_eval_episodes": 100,
   "subgoal_scope": "train",
   "unique_episode_count": 1

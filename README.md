@@ -149,7 +149,7 @@ These debug numbers are historical goal-state-reaching diagnostics. They are not
 
 From `artifacts/release/skill_jepa_wm_reliability_report.md`:
 
-| Method | Coverage success | Goal-state success | Unique episodes | Mean pose distance | Mean planning latency |
+| Method | Coverage success | Goal-state success | Unique episodes | Mean sampled-state distance | Mean planning latency |
 |---|---:|---:|---:|---:|---:|
 | Hierarchical | 0.00 | 0.07 | 1 | 264.43 | 0.249 s |
 | Flat | 0.00 | 0.07 | 1 | 355.30 | 0.564 s |
@@ -158,17 +158,17 @@ Interpretation:
 
 - The old `success_rate` column measured pose-to-sampled-goal success, not standard Push-T coverage success.
 - The legacy locked artifact has repeated sampled pairs from one unique episode.
-- Hierarchy improves pose distance and planning latency in that artifact.
+- Hierarchy improves sampled-state distance and planning latency in that artifact.
 - The artifact does not support a standard Push-T task-success claim.
 
 ### Phase A fresh current-checkpoint eval
 
 The corrected evaluator was rerun against the available sibling debug cache/checkpoint with replacement disabled, train-split subgoal lookup, strict checkpoint loading, env seeding, portable paths, and artifact hashes. The debug cache yields one unique test episode, so this is a reliability smoke rerun rather than a scaled method verdict.
 
-| Method | Coverage success | Goal-state success | Mean pose distance | Mean planning latency |
+| Method | Coverage success | Goal-state success | Mean sampled-state distance | Mean planning latency |
 |---|---:|---:|---:|---:|
-| Hierarchical | 0.00 | 0.00 | 464.56 | 0.254 s |
-| Flat | 0.00 | 0.00 | 321.15 | 0.606 s |
+| Hierarchical | 0.00 | 0.00 | 464.56 | 0.129 s |
+| Flat | 0.00 | 0.00 | 321.15 | 0.292 s |
 
 ## Tracked Artifacts
 
@@ -194,4 +194,4 @@ This repository packages experiment work built on top of `facebookresearch/jepa-
 
 ## License
 
-MIT for this repository snapshot, with upstream third-party notices retained in `THIRD-PARTY-LICENSES.md`.
+CC BY-NC 4.0 for this repository snapshot, with upstream third-party notices retained in `THIRD-PARTY-LICENSES.md`.
