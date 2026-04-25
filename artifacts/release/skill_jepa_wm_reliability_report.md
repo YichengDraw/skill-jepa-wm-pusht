@@ -11,7 +11,7 @@ Use task-aligned coverage success as the primary Push-T metric. The tracked debu
 | flat | 0.00 | 0.07 | 1 | 355.30 | 0.564s |
 | hierarchical | 0.00 | 0.07 | 1 | 264.43 | 0.249s |
 
-The old `success_rate` column measured sampled-trajectory goal-state success, not standard Push-T coverage success.
+Legacy pre-rescore outputs used `success_rate` for sampled-trajectory goal-state success; current tracked eval exports use coverage-specific names.
 Phase A fresh eval: 1 sampled pairs, 1 unique episodes, requested_split=test, actual_split=test, subgoal_scope=train, goal_mode=trajectory, task_success_claim_supported=False, under_sampled=True, provenance_warnings=6.
 
 ## Phase A Fresh Eval

@@ -11,10 +11,12 @@ from torch import nn
 from skill_jepa.analysis.eval_pusht_online import (
     NearestSubgoalResolver,
     _assign_task_goals,
+    _build_planners,
     _coverage_success,
     _eval_split_summary_fields,
     _goal_state_eval,
     _prepare_output_dir,
+    _run_episode,
     _select_task_goal_indices,
     _set_eval_seed,
     _same_record_rate,
@@ -24,9 +26,17 @@ from skill_jepa.analysis.eval_pusht_online import (
     _validate_eval_provenance,
     _validate_goal_pairs,
 )
+from skill_jepa.analysis import eval_pusht as offline_eval
+from skill_jepa.analysis import eval_pusht_online as online_eval
 from skill_jepa.data import EpisodeGoalSampler, FeatureSequenceDataset, split_episode_ids
 from skill_jepa.envs import PushTEnv
-from skill_jepa.trainers.common import assert_checkpoint_config_compatible, load_checkpoint, load_checkpoint_subset
+from skill_jepa.trainers.common import (
+    LOW_LEVEL_DATA_PROVENANCE_KEYS,
+    PASSIVE_DATA_PROVENANCE_KEYS,
+    assert_checkpoint_config_compatible,
+    load_checkpoint,
+    load_checkpoint_subset,
+)
 from skill_jepa.trainers.train_joint import _assert_low_level_passive_lineage, main as train_joint_main
 from tools import refresh_release_artifacts as release_artifacts
 from tools import run_skill_jepa_pusht_locked_suite as locked_suite
@@ -228,6 +238,28 @@ def test_train_scoped_subgoal_indices_use_data_split_seed(tmp_path: Path):
     assert actual_episode_ids != wrong_episode_ids
 
 
+def test_offline_train_scoped_subgoal_indices_use_data_split_seed(tmp_path: Path):
+    cache_path = tmp_path / "cache.h5"
+    _write_goal_cache(cache_path, np.array([4, 4, 4, 4, 4, 4], dtype=np.int32))
+    cfg = {
+        "seed": 999,
+        "data": {
+            "val_fraction": 0.2,
+            "test_fraction": 0.2,
+            "split_seed": 0,
+        },
+    }
+
+    indices = offline_eval._split_step_indices(str(cache_path), "train", cfg)
+    with h5py.File(cache_path, "r") as handle:
+        actual_episode_ids = set(handle["episode_idx"][indices].astype(int).tolist())
+    expected_episode_ids = set(split_episode_ids(6, val_fraction=0.2, test_fraction=0.2, seed=0)["train"].tolist())
+    wrong_episode_ids = set(split_episode_ids(6, val_fraction=0.2, test_fraction=0.2, seed=999)["train"].tolist())
+
+    assert actual_episode_ids == expected_episode_ids
+    assert actual_episode_ids != wrong_episode_ids
+
+
 def test_task_goal_pool_rejects_cache_without_train_success_states(tmp_path: Path):
     cache_path = tmp_path / "cache.h5"
     _write_goal_cache(cache_path, np.array([4, 4, 4], dtype=np.int32))
@@ -273,6 +305,39 @@ def test_task_goal_pool_falls_back_to_full_train_scan_when_tail_misses(tmp_path:
         env.close()
 
     assert goal_indices.tolist() == [early_train_goal_index]
+    assert coverages[0] >= 0.95
+
+
+def test_task_goal_pool_keeps_early_train_states_out_when_tail_has_success(tmp_path: Path):
+    cache_path = tmp_path / "cache.h5"
+    _write_goal_cache(cache_path, np.array([5, 5, 5], dtype=np.int32))
+    train_id = int(split_episode_ids(3, val_fraction=0.0, test_fraction=0.34, seed=0)["train"][0])
+    with h5py.File(cache_path, "r+") as handle:
+        states = handle["state"][:]
+        states[:] = np.array([100.0, 100.0, 100.0, 100.0, 0.0], dtype=np.float32)
+        early_train_goal_index = int(handle["ep_offset"][train_id])
+        tail_train_goal_index = int(handle["ep_offset"][train_id] + handle["ep_len"][train_id] - 1)
+        success_state = np.array([100.0, 100.0, 256.0, 256.0, np.pi / 4.0], dtype=np.float32)
+        states[early_train_goal_index] = success_state
+        states[tail_train_goal_index] = success_state
+        handle["state"][:] = states
+
+    env = PushTEnv(render_size=224, legacy=False, with_velocity=False)
+    try:
+        goal_indices, coverages = _select_task_goal_indices(
+            cache_path,
+            env=env,
+            val_fraction=0.0,
+            test_fraction=0.34,
+            seed=0,
+            coverage_threshold=0.95,
+            tail_steps=1,
+        )
+    finally:
+        env.close()
+
+    assert goal_indices.tolist() == [tail_train_goal_index]
+    assert early_train_goal_index not in goal_indices.tolist()
     assert coverages[0] >= 0.95
 
 
@@ -351,9 +416,9 @@ def test_method_summary_keeps_success_rate_coverage_backed_when_goal_state_disag
 
     summary = _summarize_method_records(records, "sampled_train_task_goal_full_state_diagnostic")
 
-    assert summary["success_rate"] == 0.5
     assert summary["coverage_success_rate"] == 0.5
     assert summary["goal_state_success_diagnostic_rate"] == 0.5
+    assert "success_rate" not in summary
     assert "goal_state_success_rate" not in summary
     assert not summary["goal_state_success_is_task_metric"]
 
@@ -368,12 +433,14 @@ def test_task_success_claim_gate_rejects_smoke_or_confounded_evals():
         allow_replacement=False,
         allow_under_sampling=False,
         allow_split_fallback=False,
+        subgoal_scope="train",
     )
-    assert not _task_success_claim_supported("trajectory", "val", 3, 3, 3, False, False, False)
-    assert not _task_success_claim_supported("task", "train", 3, 3, 3, False, False, False)
-    assert not _task_success_claim_supported("task", "val", 3, 1, 1, False, True, False)
-    assert not _task_success_claim_supported("task", "val", 3, 3, 1, True, False, False)
-    assert not _task_success_claim_supported("task", "val", 3, 3, 3, False, False, True)
+    assert not _task_success_claim_supported("trajectory", "val", 3, 3, 3, False, False, False, "train")
+    assert not _task_success_claim_supported("task", "train", 3, 3, 3, False, False, False, "train")
+    assert not _task_success_claim_supported("task", "val", 3, 1, 1, False, True, False, "train")
+    assert not _task_success_claim_supported("task", "val", 3, 3, 1, True, False, False, "train")
+    assert not _task_success_claim_supported("task", "val", 3, 3, 3, False, False, True, "train")
+    assert not _task_success_claim_supported("task", "val", 3, 3, 3, False, False, False, "all")
 
 
 def test_eval_split_summary_records_requested_and_actual_split(tmp_path: Path):
@@ -410,7 +477,7 @@ def test_package_discovery_keeps_runtime_import_roots():
     manifest = (Path(__file__).resolve().parents[2] / "MANIFEST.in").read_text(encoding="utf-8")
     assert "recursive-include configs *.yaml" in manifest
     assert "recursive-include docs *.md *.mmd *.png *.svg" in manifest
-    assert "recursive-include artifacts *.csv *.gif *.json *.md *.pdf *.png *.svg *.tex *.yaml" in manifest
+    assert "recursive-include artifacts *.csv *.gif *.json *.md *.pdf *.png *.svg *.yaml" in manifest
 
 
 def test_pusht_env_is_packaged_under_skill_jepa_namespace():
@@ -446,6 +513,76 @@ def test_goal_state_angle_distance_wraps_periodically():
 
     assert metrics["goal_state_success"]
     assert metrics["state_dist"] < 0.03
+
+
+def test_run_episode_records_coverage_success_as_primary_metric(monkeypatch):
+    class FakePlan:
+        def __init__(self):
+            self.actions = torch.zeros(1, 2)
+            self.skill_consistency = torch.tensor(0.25)
+
+    class FakePlanner:
+        def plan(self, **kwargs):
+            return FakePlan()
+
+    class FakeEnv:
+        def __init__(self):
+            self.reset_to_state = None
+            self.step_count = 0
+
+        def reset(self):
+            return {"visual": np.zeros((4, 4, 3), dtype=np.uint8)}, {}
+
+        def step(self, action):
+            self.step_count += 1
+            obs = {"visual": np.ones((4, 4, 3), dtype=np.uint8)}
+            info = {
+                "state": np.array([500.0, 500.0, 10.0, 10.0, 0.0], dtype=np.float32),
+                "max_coverage": 0.96,
+                "final_coverage": 0.96,
+            }
+            return obs, 0.0, False, info
+
+    monkeypatch.setattr(
+        online_eval,
+        "_load_cache_latents",
+        lambda cache_path, start_index, goal_index, device: {
+            "start_z": torch.zeros(2),
+            "start_s": torch.zeros(1, 2),
+            "goal_z": torch.ones(2),
+            "goal_s": torch.ones(1, 2),
+        },
+    )
+    monkeypatch.setattr(online_eval, "_encode_clip", lambda prev_frame, frame, encoder, projector: (torch.zeros(2), torch.zeros(1, 2)))
+
+    record = _run_episode(
+        mode="flat",
+        planners={"flat": FakePlanner()},
+        encoder=object(),
+        projector=object(),
+        env=FakeEnv(),
+        cache_path="unused.h5",
+        device=torch.device("cpu"),
+        episode_idx=0,
+        eval_seed=123,
+        start_index=0,
+        goal_index=1,
+        episode_id=0,
+        goal_episode_id=0,
+        goal_mode="task",
+        start_state=np.zeros(5, dtype=np.float32),
+        goal_state=np.zeros(5, dtype=np.float32),
+        max_steps=4,
+        execute_actions_per_plan=1,
+        coverage_threshold=0.95,
+        deterministic_timing=True,
+    )
+
+    assert record.coverage_success
+    assert not record.goal_state_success
+    assert record.max_coverage == 0.96
+    assert record.final_coverage == 0.96
+    assert record.planning_latency_sec == 0.0
 
 
 def test_set_eval_seed_calls_environment_seed():
@@ -587,6 +724,85 @@ def test_checkpoint_config_compatibility_rejects_data_split_provenance_mismatch(
         )
 
 
+def test_checkpoint_config_compatibility_resolves_implicit_split_seed_from_top_level_seed(tmp_path: Path):
+    cache = tmp_path / "cache.h5"
+    projector = tmp_path / "projector.pt"
+    cache.write_bytes(b"cache")
+    projector.write_bytes(b"projector")
+    payload = {
+        "config": {
+            "seed": 0,
+            "data": {
+                "cache_path": str(cache),
+                "projector_ckpt": str(projector),
+                "labeled_fraction": 0.1,
+                "val_fraction": 0.2,
+                "test_fraction": 0.0,
+            },
+            "encoder": {"model_id": "encoder"},
+            "model": {"hidden_dim": 8},
+        },
+        "artifact_hashes": {
+            "data.cache_path": hashlib.sha256(b"cache").hexdigest(),
+            "data.projector_ckpt": hashlib.sha256(b"projector").hexdigest(),
+        },
+    }
+    runtime_cfg = {
+        "seed": 1,
+        "data": {
+            "cache_path": str(cache),
+            "projector_ckpt": str(projector),
+            "labeled_fraction": 0.1,
+            "val_fraction": 0.2,
+            "test_fraction": 0.0,
+        },
+        "encoder": {"model_id": "encoder"},
+        "model": {"hidden_dim": 8},
+    }
+
+    with pytest.raises(RuntimeError, match="data.split_seed"):
+        assert_checkpoint_config_compatible(
+            payload,
+            runtime_cfg,
+            data_value_keys=LOW_LEVEL_DATA_PROVENANCE_KEYS,
+        )
+
+
+def test_passive_checkpoint_compatibility_allows_label_subset_drift_but_low_level_rejects_it(tmp_path: Path):
+    cache = tmp_path / "cache.h5"
+    projector = tmp_path / "projector.pt"
+    cache.write_bytes(b"cache")
+    projector.write_bytes(b"projector")
+    payload = {
+        "config": {
+            "seed": 0,
+            "data": {
+                "cache_path": str(cache),
+                "projector_ckpt": str(projector),
+                "labeled_fraction": 0.1,
+                "val_fraction": 0.2,
+                "test_fraction": 0.0,
+                "split_seed": 0,
+                "labeled_seed": 0,
+            },
+            "encoder": {"model_id": "encoder"},
+            "model": {"hidden_dim": 8},
+        },
+        "artifact_hashes": {
+            "data.cache_path": hashlib.sha256(b"cache").hexdigest(),
+            "data.projector_ckpt": hashlib.sha256(b"projector").hexdigest(),
+        },
+    }
+    runtime_cfg = {
+        **payload["config"],
+        "data": {**payload["config"]["data"], "labeled_fraction": 1.0, "labeled_seed": 99},
+    }
+
+    assert_checkpoint_config_compatible(payload, runtime_cfg, data_value_keys=PASSIVE_DATA_PROVENANCE_KEYS)
+    with pytest.raises(RuntimeError, match="data.labeled_fraction"):
+        assert_checkpoint_config_compatible(payload, runtime_cfg, data_value_keys=LOW_LEVEL_DATA_PROVENANCE_KEYS)
+
+
 def test_joint_rejects_low_level_checkpoint_from_different_passive_lineage(tmp_path: Path):
     recorded_passive = tmp_path / "recorded_passive.pt"
     current_passive = tmp_path / "current_passive.pt"
@@ -647,6 +863,8 @@ def test_locked_suite_summary_freshness_checks_hashes_and_eval_knobs(tmp_path: P
                 "goal_mode": "task",
                 "subgoal_scope": "train",
                 "requested_num_eval_episodes": 100,
+                "deterministic_timing": False,
+                "provenance": {"warnings": []},
                 "hashes": {"checkpoint_sha256": hashlib.sha256(b"current").hexdigest()},
             }
         ),
@@ -659,19 +877,19 @@ def test_locked_suite_summary_freshness_checks_hashes_and_eval_knobs(tmp_path: P
         summary_path,
         expected_goal_mode="task",
         expected_artifacts={"checkpoint": checkpoint},
-        expected_fields={"subgoal_scope": "train", "requested_num_eval_episodes": 100},
+        expected_fields={"subgoal_scope": "train", "requested_num_eval_episodes": 100, "deterministic_timing": False},
     )
     assert not locked_suite._summary_matches_current(
         summary_path,
         expected_goal_mode="task",
         expected_artifacts={"checkpoint": stale_checkpoint},
-        expected_fields={"subgoal_scope": "train", "requested_num_eval_episodes": 100},
+        expected_fields={"subgoal_scope": "train", "requested_num_eval_episodes": 100, "deterministic_timing": False},
     )
     assert not locked_suite._summary_matches_current(
         summary_path,
         expected_goal_mode="task",
         expected_artifacts={"checkpoint": checkpoint},
-        expected_fields={"subgoal_scope": "all", "requested_num_eval_episodes": 100},
+        expected_fields={"subgoal_scope": "all", "requested_num_eval_episodes": 100, "deterministic_timing": False},
     )
 
 
@@ -702,6 +920,60 @@ def test_locked_suite_summary_freshness_rejects_dirty_state_mismatch(tmp_path: P
     )
 
 
+def test_locked_suite_summary_freshness_rejects_provenance_disabled(tmp_path: Path, monkeypatch):
+    checkpoint = tmp_path / "checkpoint.pt"
+    checkpoint.write_bytes(b"current")
+    summary_path = tmp_path / "pusht_online_eval.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "code_commit": "abc123",
+                "code_dirty": False,
+                "goal_mode": "task",
+                "provenance": {"warnings": ["Provenance validation was disabled by --allow-provenance-mismatch"]},
+                "hashes": {"checkpoint_sha256": hashlib.sha256(b"current").hexdigest()},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(locked_suite, "_git_commit", lambda: "abc123")
+    monkeypatch.setattr(locked_suite, "_git_dirty", lambda: False)
+
+    assert not locked_suite._summary_matches_current(
+        summary_path,
+        expected_goal_mode="task",
+        expected_artifacts={"checkpoint": checkpoint},
+    )
+
+
+def test_locked_suite_summary_freshness_checks_deterministic_timing_field(tmp_path: Path, monkeypatch):
+    checkpoint = tmp_path / "checkpoint.pt"
+    checkpoint.write_bytes(b"current")
+    summary_path = tmp_path / "pusht_online_eval.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "code_commit": "abc123",
+                "code_dirty": False,
+                "goal_mode": "task",
+                "deterministic_timing": True,
+                "provenance": {"warnings": []},
+                "hashes": {"checkpoint_sha256": hashlib.sha256(b"current").hexdigest()},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(locked_suite, "_git_commit", lambda: "abc123")
+    monkeypatch.setattr(locked_suite, "_git_dirty", lambda: False)
+
+    assert not locked_suite._summary_matches_current(
+        summary_path,
+        expected_goal_mode="task",
+        expected_artifacts={"checkpoint": checkpoint},
+        expected_fields={"deterministic_timing": False},
+    )
+
+
 def test_locked_suite_checkpoint_reuse_rejects_commit_config_and_lineage_drift(tmp_path: Path, monkeypatch):
     cache = tmp_path / "cache.h5"
     projector = tmp_path / "projector.pt"
@@ -717,7 +989,7 @@ def test_locked_suite_checkpoint_reuse_rejects_commit_config_and_lineage_drift(t
         path.write_bytes(payload)
     cfg = {
         "seed": 0,
-        "data": {"cache_path": str(cache), "projector_ckpt": str(projector)},
+        "data": {"cache_path": str(cache), "projector_ckpt": str(projector), "split_seed": 0, "labeled_seed": 17},
         "training": {"passive_checkpoint": str(passive), "low_level_checkpoint": str(low_level)},
     }
     torch.save(
@@ -749,6 +1021,67 @@ def test_locked_suite_checkpoint_reuse_rejects_commit_config_and_lineage_drift(t
     assert not locked_suite._checkpoint_matches_config(checkpoint, drifted_cfg, ("data.cache_path",))
     passive.write_bytes(b"overwritten-passive")
     assert not locked_suite._checkpoint_matches_config(checkpoint, cfg, ("training.passive_checkpoint",))
+
+
+def test_locked_suite_aggregate_only_rejects_stale_existing_eval(tmp_path: Path, monkeypatch):
+    output_root = tmp_path / "suite"
+    config_root = output_root / "configs"
+    eval_root = output_root / "evals"
+    cache_root = output_root / "cache"
+    cfg_path = config_root / "seed_0_joint10.yaml"
+    checkpoint = output_root / "seed_0" / "joint_10pct" / "joint" / "joint_best.pt"
+    cache = cache_root / "pusht_vjepa2_cache_13024ep.h5"
+    projector = tmp_path / "projector.pt"
+    summary_dir = eval_root / "seed_0" / "joint_hier_10pct" / "goal_gap_24"
+    for path in [cfg_path, checkpoint, cache, projector]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"artifact")
+    summary_dir.mkdir(parents=True)
+    (summary_dir / "pusht_online_eval.json").write_text(
+        json.dumps(
+            {
+                "code_commit": "old",
+                "code_dirty": False,
+                "goal_mode": "task",
+                "mode": "hierarchical",
+                "requested_eval_split": "val",
+                "subgoal_scope": "train",
+                "goal_gap": 24,
+                "requested_num_eval_episodes": 100,
+                "allow_replacement": False,
+                "allow_under_sampling": False,
+                "allow_split_fallback": False,
+                "deterministic_timing": False,
+                "provenance": {"warnings": []},
+                "hashes": {
+                    "config_sha256": hashlib.sha256(b"artifact").hexdigest(),
+                    "checkpoint_sha256": hashlib.sha256(b"artifact").hexdigest(),
+                    "cache_sha256": hashlib.sha256(b"artifact").hexdigest(),
+                    "projector_sha256": hashlib.sha256(b"artifact").hexdigest(),
+                },
+                "hierarchical": {"coverage_success_rate": 0.0, "records": []},
+                "num_eval_episodes": 100,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (summary_dir / "pusht_online_records.csv").write_text("method,episode_idx\n", encoding="utf-8")
+    monkeypatch.setattr(locked_suite, "OUTPUT_ROOT", output_root)
+    monkeypatch.setattr(locked_suite, "CONFIG_ROOT", config_root)
+    monkeypatch.setattr(locked_suite, "EVAL_ROOT", eval_root)
+    monkeypatch.setattr(locked_suite, "CACHE_ROOT", cache_root)
+    monkeypatch.setattr(locked_suite, "DEBUG_PROJECTOR", projector)
+    monkeypatch.setattr(locked_suite, "GOAL_EVALS", [(24, 100, False)])
+    monkeypatch.setattr(
+        locked_suite,
+        "_eval_specs",
+        lambda artifacts: [("joint_hier_10pct", cfg_path, checkpoint, "hierarchical")],
+    )
+    monkeypatch.setattr(locked_suite, "_git_commit", lambda: "current")
+    monkeypatch.setattr(locked_suite, "_git_dirty", lambda: False)
+
+    with pytest.raises(RuntimeError, match="stale or unverifiable"):
+        locked_suite._collect_existing_results([0])
 
 
 def test_release_sanitizer_converts_legacy_success_to_coverage_metric(tmp_path: Path, monkeypatch):
@@ -844,10 +1177,13 @@ def test_release_sanitizer_converts_legacy_success_to_coverage_metric(tmp_path: 
     csv_text = records_path.read_text(encoding="utf-8")
 
     assert refreshed_summary["cache_path"] == "external/legacy_debug_cache.h5"
-    assert refreshed_summary["flat"]["success_rate"] == 0.0
-    assert refreshed_summary["hierarchical"]["success_rate"] == 1.0
+    assert refreshed_summary["flat"]["coverage_success_rate"] == 0.0
+    assert refreshed_summary["hierarchical"]["coverage_success_rate"] == 1.0
+    assert "success_rate" not in refreshed_summary["flat"]
+    assert "success_rate" not in refreshed_summary["hierarchical"]
     assert refreshed_summary["flat"]["goal_state_success_scope"] == "trajectory_full_state_diagnostic"
     assert "goal_state_success_rate" not in refreshed_summary["flat"]
+    assert "success" not in refreshed_summary["flat"]["records"][0]
     assert sanitized[0]["coverage_success"] == "False"
     assert sanitized[0]["goal_state_success"] == "True"
     assert "success" not in csv_text.splitlines()[0].split(",")
@@ -974,6 +1310,60 @@ def test_subgoal_resolver_rejects_empty_allowed_indices(tmp_path: Path):
         NearestSubgoalResolver(str(cache_path), torch.device("cpu"), allowed_indices=np.array([], dtype=np.int64))
 
 
+def test_build_planners_wires_train_only_subgoal_indices(monkeypatch):
+    calls = {}
+
+    class DummyPlanner:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    class DummyHierarchicalPlanner:
+        def __init__(self, high_level, low_level, subgoal_resolver=None):
+            self.subgoal_resolver = subgoal_resolver
+
+    class DummyResolver:
+        def __init__(self, cache_path, device, chunk_size=4096, allowed_indices=None):
+            self.allowed_indices = allowed_indices
+            calls["allowed_indices"] = allowed_indices
+
+    monkeypatch.setattr(online_eval, "HighLevelCEMPlanner", DummyPlanner)
+    monkeypatch.setattr(online_eval, "RandomHighLevelPlanner", DummyPlanner)
+    monkeypatch.setattr(online_eval, "LowLevelCEMPlanner", DummyPlanner)
+    monkeypatch.setattr(online_eval, "HierarchicalPlanner", DummyHierarchicalPlanner)
+    monkeypatch.setattr(online_eval, "NearestSubgoalResolver", DummyResolver)
+    monkeypatch.setattr(online_eval, "_split_step_indices", lambda cache_path, split, cfg: np.array([5, 6], dtype=np.int64))
+
+    cfg = {
+        "seed": 999,
+        "data": {"cache_path": "cache.h5", "val_fraction": 0.2, "test_fraction": 0.2, "split_seed": 0},
+        "model": {"skill_dim": 2},
+        "planner": {
+            "high_level_horizon": 1,
+            "high_level_population": 2,
+            "high_level_elites": 1,
+            "high_level_iters": 1,
+            "high_level_skill_penalty": 0.0,
+            "high_level_prior_penalty": 0.0,
+            "low_level_horizon": 1,
+            "low_level_population": 2,
+            "low_level_elites": 1,
+            "low_level_iters": 1,
+            "low_level_skill_penalty": 0.0,
+            "action_penalty": 0.0,
+        },
+    }
+
+    modules = {
+        "skill_wm": object(),
+        "skill_prior": object(),
+        "low_level_wm": object(),
+        "action_chunk_encoder": object(),
+    }
+    planners = _build_planners(cfg, modules=modules, meta={"action_dim": 2}, device=torch.device("cpu"), subgoal_scope="train")
+    np.testing.assert_array_equal(calls["allowed_indices"], np.array([5, 6], dtype=np.int64))
+    assert planners["hierarchical"].subgoal_resolver.allowed_indices is calls["allowed_indices"]
+
+
 def test_eval_provenance_rejects_projector_mismatch(tmp_path: Path):
     cache_path = tmp_path / "cache.h5"
     projector_a = tmp_path / "projector_a.pt"
@@ -1014,6 +1404,57 @@ def test_eval_provenance_requires_checkpoint_config(tmp_path: Path):
 
     with pytest.raises(RuntimeError, match="training config"):
         _validate_eval_provenance(cfg, checkpoint_payload={})
+
+
+def test_eval_provenance_rejects_checkpoint_model_config_mismatch(tmp_path: Path):
+    cache_path = tmp_path / "cache.h5"
+    projector = tmp_path / "projector.pt"
+    projector.write_bytes(b"projector")
+    with h5py.File(cache_path, "w") as handle:
+        handle.attrs["projector_ckpt"] = str(projector)
+    cfg = {
+        "data": {"cache_path": str(cache_path), "projector_ckpt": str(projector)},
+        "encoder": {"model_id": "encoder", "state_dim": 4},
+        "model": {"hidden_dim": 8},
+    }
+    checkpoint_payload = {
+        "config": {
+            "data": cfg["data"],
+            "encoder": cfg["encoder"],
+            "model": {"hidden_dim": 16},
+        }
+    }
+
+    with pytest.raises(RuntimeError, match="model config"):
+        _validate_eval_provenance(cfg, checkpoint_payload)
+
+
+def test_eval_provenance_rejects_checkpoint_projector_hash_mismatch(tmp_path: Path):
+    cache_path = tmp_path / "cache.h5"
+    projector = tmp_path / "projector.pt"
+    projector.write_bytes(b"current-projector")
+    with h5py.File(cache_path, "w") as handle:
+        handle.attrs["projector_ckpt"] = str(projector)
+        handle.attrs["projector_ckpt_sha256"] = hashlib.sha256(b"current-projector").hexdigest()
+    cfg = {
+        "data": {"cache_path": str(cache_path), "projector_ckpt": str(projector)},
+        "encoder": {"model_id": "encoder", "state_dim": 4},
+        "model": {"hidden_dim": 8},
+    }
+    checkpoint_payload = {
+        "config": {
+            "data": cfg["data"],
+            "encoder": cfg["encoder"],
+            "model": cfg["model"],
+        },
+        "artifact_hashes": {
+            "data.cache_path": hashlib.sha256(cache_path.read_bytes()).hexdigest(),
+            "data.projector_ckpt": hashlib.sha256(b"old-projector").hexdigest(),
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="data.projector_ckpt hash"):
+        _validate_eval_provenance(cfg, checkpoint_payload)
 
 
 def test_eval_provenance_rejects_in_place_projector_overwrite(tmp_path: Path):

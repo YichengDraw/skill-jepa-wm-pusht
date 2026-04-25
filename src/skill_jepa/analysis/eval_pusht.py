@@ -66,7 +66,7 @@ def _split_step_indices(cache_path: str, split: str, cfg: dict) -> np.ndarray:
         len(ep_len),
         cfg["data"]["val_fraction"],
         cfg["data"]["test_fraction"],
-        int(cfg["seed"]),
+        int(cfg["data"].get("split_seed", cfg["seed"])),
     )[split]
     indices = []
     for episode_id in split_ids.tolist():
@@ -219,7 +219,7 @@ def main() -> None:
         split="test",
         val_fraction=cfg["data"]["val_fraction"],
         test_fraction=cfg["data"]["test_fraction"],
-        seed=cfg["seed"],
+        seed=int(cfg["data"].get("split_seed", cfg["seed"])),
         goal_gap=planner_cfg["goal_gap"],
     )
     goal_pairs = sampler.sample(

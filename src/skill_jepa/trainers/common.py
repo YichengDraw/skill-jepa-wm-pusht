@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import subprocess
+from copy import deepcopy
 from pathlib import Path
 from typing import Dict
 
@@ -14,7 +15,9 @@ from skill_jepa.utils import ensure_dir
 
 
 ROOT = Path(__file__).resolve().parents[3]
-DATA_PROVENANCE_KEYS = ("labeled_fraction", "val_fraction", "test_fraction", "split_seed", "labeled_seed")
+PASSIVE_DATA_PROVENANCE_KEYS = ("val_fraction", "test_fraction", "split_seed")
+LOW_LEVEL_DATA_PROVENANCE_KEYS = ("labeled_fraction", "val_fraction", "test_fraction", "split_seed", "labeled_seed")
+DATA_PROVENANCE_KEYS = LOW_LEVEL_DATA_PROVENANCE_KEYS
 
 
 def sha256_file(path: str | Path | None) -> str | None:
@@ -86,6 +89,20 @@ def git_status_porcelain() -> str | None:
     return result.stdout
 
 
+def _git_output_bytes(args: list[str]) -> bytes | None:
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return result.stdout
+
+
 def git_dirty() -> bool | None:
     status = git_status_porcelain()
     if status is None:
@@ -94,10 +111,43 @@ def git_dirty() -> bool | None:
 
 
 def git_status_sha256() -> str | None:
-    status = git_status_porcelain()
+    status = _git_output_bytes(["status", "--porcelain=v1", "--untracked-files=all", "-z"])
     if status is None:
         return None
-    return hashlib.sha256(status.encode("utf-8")).hexdigest()
+    hasher = hashlib.sha256()
+    hasher.update(b"STATUS\0")
+    hasher.update(status)
+    for args in (["diff", "--binary"], ["diff", "--cached", "--binary"]):
+        diff = _git_output_bytes(args)
+        if diff is None:
+            return None
+        hasher.update(b"\0DIFF\0")
+        hasher.update(diff)
+    untracked = _git_output_bytes(["ls-files", "--others", "--exclude-standard", "-z"])
+    if untracked is None:
+        return None
+    for rel_bytes in sorted(part for part in untracked.split(b"\0") if part):
+        rel_path = rel_bytes.decode("utf-8", errors="surrogateescape")
+        file_path = ROOT / rel_path
+        if not file_path.is_file():
+            continue
+        hasher.update(b"\0UNTRACKED\0")
+        hasher.update(rel_bytes)
+        with open(file_path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def resolve_data_seed_config(config: Dict) -> Dict:
+    resolved = deepcopy(config)
+    data_cfg = resolved.setdefault("data", {})
+    seed = int(resolved.get("seed", 0))
+    if data_cfg.get("split_seed") is None:
+        data_cfg["split_seed"] = seed
+    if data_cfg.get("labeled_seed") is None:
+        data_cfg["labeled_seed"] = seed + 17
+    return resolved
 
 
 def assert_checkpoint_config_compatible(
@@ -111,6 +161,8 @@ def assert_checkpoint_config_compatible(
     checkpoint_config = checkpoint_payload.get("config", {})
     if not checkpoint_config:
         raise RuntimeError(f"{label} does not record its training config")
+    checkpoint_config = resolve_data_seed_config(checkpoint_config)
+    runtime_config = resolve_data_seed_config(runtime_config)
     for section in sections:
         if checkpoint_config.get(section) != runtime_config.get(section):
             raise RuntimeError(f"{label} {section} config does not match the runtime config")
@@ -221,7 +273,7 @@ def save_checkpoint(
     ensure_dir(Path(path).parent)
     payload = {
         "step": step,
-        "config": config,
+        "config": resolve_data_seed_config(config),
         "code_commit": git_commit(),
         "code_dirty": git_dirty(),
         "code_status_sha256": git_status_sha256(),

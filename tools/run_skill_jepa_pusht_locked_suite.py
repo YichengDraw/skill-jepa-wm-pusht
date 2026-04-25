@@ -23,6 +23,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from skill_jepa.trainers.common import git_status_sha256 as _repo_git_status_sha256
+from skill_jepa.trainers.common import resolve_data_seed_config
 from skill_jepa.utils import ensure_dir, load_yaml
 
 PYTHON = Path(sys.executable)
@@ -118,10 +120,7 @@ def _git_dirty() -> bool | None:
 
 
 def _git_status_sha256() -> str | None:
-    status = _git_status_porcelain()
-    if status is None:
-        return None
-    return hashlib.sha256(status.encode("utf-8")).hexdigest()
+    return _repo_git_status_sha256()
 
 
 def _sha256_file(path: str | Path | None) -> str | None:
@@ -155,6 +154,12 @@ def _summary_matches_current(
     if summary.get("code_dirty", False) != _git_dirty():
         return False
     if bool(summary.get("code_dirty", False)) and summary.get("code_status_sha256") != _git_status_sha256():
+        return False
+    provenance = summary.get("provenance")
+    if not isinstance(provenance, dict):
+        return False
+    warnings = [str(warning) for warning in provenance.get("warnings", [])]
+    if any("Provenance validation was disabled" in warning or "--allow-provenance-mismatch" in warning for warning in warnings):
         return False
     for key, expected in (expected_fields or {}).items():
         if summary.get(key) != expected:
@@ -190,7 +195,7 @@ def _checkpoint_matches_config(path: Path, cfg: dict, hash_keys: tuple[str, ...]
         return False
     if bool(payload.get("code_dirty", False)) and payload.get("code_status_sha256") != _git_status_sha256():
         return False
-    if payload.get("config") != cfg:
+    if payload.get("config") != resolve_data_seed_config(cfg):
         return False
     expected_hashes = {
         "data.cache_path": _sha256_file(cfg.get("data", {}).get("cache_path")),
@@ -230,6 +235,30 @@ def _base_scaled_cfg(seed: int, labeled_fraction: float, seed_root: Path) -> dic
     cfg["planner"]["task_goal_seed"] = 0
     cfg["planner"]["num_eval_episodes"] = 100
     return cfg
+
+
+def _coverage_success_rate(method_summary: dict) -> float:
+    if "coverage_success_rate" in method_summary:
+        return float(method_summary["coverage_success_rate"])
+    return float(method_summary["success_rate"])
+
+
+def _goal_state_diagnostic_rate(method_summary: dict) -> float:
+    if "goal_state_success_diagnostic_rate" in method_summary:
+        return float(method_summary["goal_state_success_diagnostic_rate"])
+    if "goal_state_success_rate" in method_summary:
+        return float(method_summary["goal_state_success_rate"])
+    return float(method_summary.get("success_rate", 0.0))
+
+
+def _eval_specs(artifacts: dict[str, Path]) -> list[tuple[str, Path, Path, str]]:
+    return [
+        ("joint_hier_10pct", artifacts["joint_cfg"], artifacts["joint10"], "hierarchical"),
+        ("joint_flat_10pct", artifacts["joint_cfg"], artifacts["joint10"], "flat"),
+        ("labeled_only_flat_10pct", artifacts["joint_cfg"], artifacts["low10"], "flat"),
+        ("labeled_only_flat_100pct", artifacts["low100_cfg"], artifacts["low100"], "flat"),
+        ("random_skill_hier_10pct", artifacts["joint_cfg"], artifacts["joint10"], "random_hierarchical"),
+    ]
 
 
 def _attr_text(value: object) -> str | None:
@@ -299,6 +328,7 @@ def run_debug_reeval(force: bool = False) -> Path:
             "allow_replacement": False,
             "allow_under_sampling": True,
             "allow_split_fallback": False,
+            "deterministic_timing": False,
         },
     ):
         return summary_path
@@ -408,14 +438,7 @@ def train_seed(seed: int) -> dict[str, Path]:
 def evaluate_seed(seed: int, artifacts: dict[str, Path]) -> tuple[list[dict], list[dict]]:
     rows: list[dict] = []
     episode_rows: list[dict] = []
-    eval_specs = [
-        ("joint_hier_10pct", artifacts["joint_cfg"], artifacts["joint10"], "hierarchical"),
-        ("joint_flat_10pct", artifacts["joint_cfg"], artifacts["joint10"], "flat"),
-        ("labeled_only_flat_10pct", artifacts["joint_cfg"], artifacts["low10"], "flat"),
-        ("labeled_only_flat_100pct", artifacts["low100_cfg"], artifacts["low100"], "flat"),
-        ("random_skill_hier_10pct", artifacts["joint_cfg"], artifacts["joint10"], "random_hierarchical"),
-    ]
-    for config_name, cfg_path, checkpoint_path, mode in eval_specs:
+    for config_name, cfg_path, checkpoint_path, mode in _eval_specs(artifacts):
         for goal_gap, num_eval, save_videos in GOAL_EVALS:
             out_dir = EVAL_ROOT / f"seed_{seed}" / config_name / f"goal_gap_{goal_gap}"
             summary_path = out_dir / "pusht_online_eval.json"
@@ -437,6 +460,7 @@ def evaluate_seed(seed: int, artifacts: dict[str, Path]) -> tuple[list[dict], li
                     "allow_replacement": False,
                     "allow_under_sampling": False,
                     "allow_split_fallback": False,
+                    "deterministic_timing": False,
                 },
             ):
                 command = [
@@ -470,10 +494,8 @@ def evaluate_seed(seed: int, artifacts: dict[str, Path]) -> tuple[list[dict], li
             with open(summary_path, "r", encoding="utf-8") as handle:
                 summary = json.load(handle)
             method_summary = summary[mode]
-            goal_state_rate = method_summary.get(
-                "goal_state_success_rate",
-                method_summary.get("goal_state_success_diagnostic_rate", method_summary["success_rate"]),
-            )
+            coverage_rate = _coverage_success_rate(method_summary)
+            goal_state_rate = _goal_state_diagnostic_rate(method_summary)
             rows.append(
                 {
                     "seed": seed,
@@ -481,8 +503,8 @@ def evaluate_seed(seed: int, artifacts: dict[str, Path]) -> tuple[list[dict], li
                     "goal_gap": goal_gap,
                     "num_eval_episodes": summary.get("num_eval_episodes", num_eval),
                     "mode": mode,
-                    "success_rate": method_summary.get("coverage_success_rate", method_summary["success_rate"]),
-                    "coverage_success_rate": method_summary.get("coverage_success_rate", method_summary["success_rate"]),
+                    "success_rate": coverage_rate,
+                    "coverage_success_rate": coverage_rate,
                     "goal_state_success_diagnostic_rate": goal_state_rate,
                     "state_dist": method_summary["state_dist"],
                     "final_latent_distance": method_summary["final_latent_distance"],
@@ -527,14 +549,12 @@ def _save_current_best_csv(summary_path: Path) -> Path:
         writer.writeheader()
         for method in ["hierarchical", "flat"]:
             payload = summary[method]
-            goal_state_rate = payload.get(
-                "goal_state_success_rate",
-                payload.get("goal_state_success_diagnostic_rate", payload["success_rate"]),
-            )
+            coverage_rate = _coverage_success_rate(payload)
+            goal_state_rate = _goal_state_diagnostic_rate(payload)
             writer.writerow(
                 {
                     "method": method,
-                    "coverage_success_rate": payload.get("coverage_success_rate", payload["success_rate"]),
+                    "coverage_success_rate": coverage_rate,
                     "goal_state_success_diagnostic_rate": goal_state_rate,
                     "state_dist": payload["state_dist"],
                     "final_latent_distance": payload["final_latent_distance"],
@@ -753,27 +773,45 @@ def _collect_existing_results(seeds: list[int]) -> tuple[list[dict], list[dict]]
     rows: list[dict] = []
     episode_rows: list[dict] = []
     for seed in seeds:
-        for config_name in CONFIG_ORDER:
-            for goal_gap, _, _ in GOAL_EVALS:
+        artifacts = {
+            "joint_cfg": CONFIG_ROOT / f"seed_{seed}_joint10.yaml",
+            "low100_cfg": CONFIG_ROOT / f"seed_{seed}_low100.yaml",
+            **_seed_paths(seed),
+        }
+        for config_name, cfg_path, checkpoint_path, mode in _eval_specs(artifacts):
+            for goal_gap, num_eval, _ in GOAL_EVALS:
                 out_dir = EVAL_ROOT / f"seed_{seed}" / config_name / f"goal_gap_{goal_gap}"
                 summary_path = out_dir / "pusht_online_eval.json"
                 records_path = out_dir / "pusht_online_records.csv"
                 if not summary_path.exists() or not records_path.exists():
                     raise FileNotFoundError(f"Missing expected evaluation artifact: {out_dir}")
+                if not _summary_matches_current(
+                    summary_path,
+                    expected_goal_mode="task",
+                    expected_artifacts={
+                        "config": cfg_path,
+                        "checkpoint": checkpoint_path,
+                        "cache": CACHE_ROOT / "pusht_vjepa2_cache_13024ep.h5",
+                        "projector": DEBUG_PROJECTOR,
+                    },
+                    expected_fields={
+                        "mode": mode,
+                        "requested_eval_split": "val",
+                        "subgoal_scope": "train",
+                        "goal_gap": goal_gap,
+                        "requested_num_eval_episodes": num_eval,
+                        "allow_replacement": False,
+                        "allow_under_sampling": False,
+                        "allow_split_fallback": False,
+                        "deterministic_timing": False,
+                    },
+                ):
+                    raise RuntimeError(f"Existing aggregate-only evaluation is stale or unverifiable: {summary_path}")
                 with open(summary_path, "r", encoding="utf-8") as handle:
                     summary = json.load(handle)
-                mode = {
-                    "joint_hier_10pct": "hierarchical",
-                    "joint_flat_10pct": "flat",
-                    "labeled_only_flat_10pct": "flat",
-                    "labeled_only_flat_100pct": "flat",
-                    "random_skill_hier_10pct": "random_hierarchical",
-                }[config_name]
                 method_summary = summary[mode]
-                goal_state_rate = method_summary.get(
-                    "goal_state_success_rate",
-                    method_summary.get("goal_state_success_diagnostic_rate", method_summary["success_rate"]),
-                )
+                coverage_rate = _coverage_success_rate(method_summary)
+                goal_state_rate = _goal_state_diagnostic_rate(method_summary)
                 rows.append(
                     {
                         "seed": seed,
@@ -781,8 +819,8 @@ def _collect_existing_results(seeds: list[int]) -> tuple[list[dict], list[dict]]
                     "goal_gap": goal_gap,
                     "num_eval_episodes": summary["num_eval_episodes"],
                     "mode": mode,
-                    "success_rate": method_summary.get("coverage_success_rate", method_summary["success_rate"]),
-                    "coverage_success_rate": method_summary.get("coverage_success_rate", method_summary["success_rate"]),
+                    "success_rate": coverage_rate,
+                    "coverage_success_rate": coverage_rate,
                     "goal_state_success_diagnostic_rate": goal_state_rate,
                     "state_dist": method_summary["state_dist"],
                         "final_latent_distance": method_summary["final_latent_distance"],

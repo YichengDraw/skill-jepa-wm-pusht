@@ -9,6 +9,7 @@
   "code_dirty": false,
   "code_status_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "coverage_threshold": 0.95,
+  "deterministic_timing": false,
   "eval_seed": 7,
   "eval_split": "test",
   "execute_actions_per_plan": 4,
@@ -40,13 +41,11 @@
         "start_latent_distance": 0.00562776904553175,
         "state_dist": 321.1493225097656,
         "steps_taken": 32,
-        "success": false,
         "video_path": "artifacts/phase_a_current_checkpoint/evals/videos/flat/episode_000.gif"
       }
     ],
     "skill_consistency": 0.0,
     "state_dist": 321.1493225097656,
-    "success_rate": 0.0,
     "unique_episode_count": 1
   },
   "goal_gap": 24,
@@ -84,13 +83,11 @@
         "start_latent_distance": 0.00562776904553175,
         "state_dist": 464.55804443359375,
         "steps_taken": 32,
-        "success": false,
         "video_path": "artifacts/phase_a_current_checkpoint/evals/videos/hierarchical/episode_000.gif"
       }
     ],
     "skill_consistency": 0.18830398935824633,
     "state_dist": 464.55804443359375,
-    "success_rate": 0.0,
     "unique_episode_count": 1
   },
   "hierarchical_coverage_better_rate": 0.0,
@@ -121,7 +118,7 @@
   "requested_num_eval_episodes": 100,
   "split_seed": 7,
   "subgoal_scope": "train",
-  "success_semantics": "success and success_rate are Push-T coverage_success; goal_state_success is diagnostic only",
+  "success_semantics": "coverage_success and coverage_success_rate are Push-T coverage metrics; goal_state_success is diagnostic only",
   "task_goal_pool_mean_coverage": null,
   "task_goal_pool_min_coverage": null,
   "task_goal_pool_size": 0,

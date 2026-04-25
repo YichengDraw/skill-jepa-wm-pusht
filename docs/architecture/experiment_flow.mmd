@@ -1,19 +1,24 @@
 flowchart TD
   data["Local Push-T HDF5"] --> cache["Build V-JEPA2 latent cache"]
   cache --> passive["Train passive skill model"]
-  cache --> low["Train low-level action WM"]
-  passive --> joint["Joint finetune"]
-  low --> joint
-  joint --> eval["Forced online eval"]
-  eval --> flat["Flat planner"]
-  eval --> hier["Hierarchical planner"]
-  eval --> random["Random-skill hierarchy ablation"]
-  flat --> gate["Goal-mode gate"]
-  hier --> gate
-  random --> gate
-  gate --> metrics["Task-aligned coverage metrics"]
-  gate --> diag["Trajectory diagnostics: no task claim"]
+  passive --> low10["Train low-level WM: 10 percent labels"]
+  passive --> low100["Train low-level WM: 100 percent labels"]
+  low10 --> joint["Joint finetune: 10 percent labels"]
+  passive --> joint
+  cache --> goals["Goal mode selection before rollout"]
+  goals --> eval_joint["Forced online eval: joint checkpoint"]
+  goals --> eval_low["Forced online eval: low-level checkpoints"]
+  joint --> eval_joint
+  low10 --> eval_low
+  low100 --> eval_low
+  eval_joint --> flat["Joint flat planner"]
+  eval_joint --> hier["Joint hierarchical planner"]
+  eval_joint --> random["Random-skill hierarchy ablation"]
+  eval_low --> lowflat["Labeled-only flat baselines"]
+  flat --> metrics["Coverage primary plus goal-state diagnostic"]
+  hier --> metrics
+  random --> metrics
+  lowflat --> metrics
   metrics --> plots["Plots and rollout montage"]
-  diag --> plots
   plots --> report["Reliability report"]
   report --> release["Clean GitHub release"]

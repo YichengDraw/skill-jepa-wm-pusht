@@ -44,10 +44,14 @@ MODEL_PIPELINE_MMD = """flowchart TD
   actions --> actionenc["ActionChunkEncoder"]
   skill --> highcem["HighLevelCEM: skill sequence to subgoal z"]
   highcem --> resolver["Train-split nearest cached s"]
-  resolver --> lowcem["LowLevelCEM: action sequence"]
-  lowwm --> lowcem
-  actionenc --> lowcem
-  lowcem --> env["Execute first actions in PushTEnv"]
+  resolver --> hierlow["Hierarchical LowLevelCEM"]
+  s --> flatlow["Flat LowLevelCEM with goal_s"]
+  lowwm --> hierlow
+  lowwm --> flatlow
+  actionenc --> hierlow
+  actionenc --> flatlow
+  hierlow --> env["Execute first actions in PushTEnv"]
+  flatlow --> env
   env --> live["Live visual observation"]
   live --> clips
 """
@@ -56,20 +60,25 @@ MODEL_PIPELINE_MMD = """flowchart TD
 EXPERIMENT_FLOW_MMD = """flowchart TD
   data["Local Push-T HDF5"] --> cache["Build V-JEPA2 latent cache"]
   cache --> passive["Train passive skill model"]
-  cache --> low["Train low-level action WM"]
-  passive --> joint["Joint finetune"]
-  low --> joint
-  joint --> eval["Forced online eval"]
-  eval --> flat["Flat planner"]
-  eval --> hier["Hierarchical planner"]
-  eval --> random["Random-skill hierarchy ablation"]
-  flat --> gate["Goal-mode gate"]
-  hier --> gate
-  random --> gate
-  gate --> metrics["Task-aligned coverage metrics"]
-  gate --> diag["Trajectory diagnostics: no task claim"]
+  passive --> low10["Train low-level WM: 10 percent labels"]
+  passive --> low100["Train low-level WM: 100 percent labels"]
+  low10 --> joint["Joint finetune: 10 percent labels"]
+  passive --> joint
+  cache --> goals["Goal mode selection before rollout"]
+  goals --> eval_joint["Forced online eval: joint checkpoint"]
+  goals --> eval_low["Forced online eval: low-level checkpoints"]
+  joint --> eval_joint
+  low10 --> eval_low
+  low100 --> eval_low
+  eval_joint --> flat["Joint flat planner"]
+  eval_joint --> hier["Joint hierarchical planner"]
+  eval_joint --> random["Random-skill hierarchy ablation"]
+  eval_low --> lowflat["Labeled-only flat baselines"]
+  flat --> metrics["Coverage primary plus goal-state diagnostic"]
+  hier --> metrics
+  random --> metrics
+  lowflat --> metrics
   metrics --> plots["Plots and rollout montage"]
-  diag --> plots
   plots --> report["Reliability report"]
   report --> release["Clean GitHub release"]
 """
@@ -142,7 +151,8 @@ def render_diagrams() -> None:
         "model_action": (7.0, 4.5, "ActionChunk\nEncoder"),
         "planner_high": (12.4, 6.9, "HighLevelCEM\nsubgoal z"),
         "planner_resolve": (12.4, 5.7, "Train-split\nnearest s"),
-        "planner_low": (10.9, 4.5, "LowLevelCEM\nactions"),
+        "planner_hier_low": (12.4, 4.5, "Hierarchical\nLowLevelCEM"),
+        "planner_flat_low": (10.2, 4.4, "Flat LowLevelCEM\ndirect goal_s"),
         "eval_env": (7.0, 3.2, "PushTEnv\nexecute actions"),
         "eval_live": (3.1, 3.2, "Live visual obs\nre-encode"),
     }
@@ -158,47 +168,58 @@ def render_diagrams() -> None:
         ("input_actions", "model_action"),
         ("model_skill", "planner_high"),
         ("planner_high", "planner_resolve"),
-        ("planner_resolve", "planner_low"),
-        ("model_low", "planner_low"),
-        ("model_action", "planner_low"),
-        ("planner_low", "eval_env"),
+        ("planner_resolve", "planner_hier_low"),
+        ("latent_s", "planner_flat_low"),
+        ("model_low", "planner_hier_low"),
+        ("model_low", "planner_flat_low"),
+        ("model_action", "planner_hier_low"),
+        ("model_action", "planner_flat_low"),
+        ("planner_hier_low", "eval_env"),
+        ("planner_flat_low", "eval_env"),
         ("eval_env", "eval_live"),
         ("eval_live", "input_clips"),
     ]
     flow_nodes = {
-        "input_data": (1.1, 5.9, "Local Push-T\nHDF5"),
-        "model_cache": (3.0, 5.9, "Build V-JEPA2\nlatent cache"),
-        "model_passive": (5.2, 6.6, "Passive skill\ntraining"),
-        "model_low": (5.2, 5.2, "Low-level action\nWM training"),
-        "model_joint": (7.2, 5.9, "Joint\nfinetune"),
-        "eval_online": (9.1, 5.9, "Forced online\neval"),
-        "planner_flat": (10.9, 6.8, "Flat"),
-        "planner_hier": (10.9, 5.9, "Hierarchical"),
-        "planner_random": (10.9, 5.0, "Random-skill\nhierarchy"),
-        "eval_gate": (12.2, 5.9, "Goal-mode\ngate"),
-        "eval_metrics": (13.6, 6.6, "Task-aligned\ncoverage metrics"),
-        "eval_diag": (13.6, 5.2, "Trajectory diagnostics\nno task claim"),
-        "eval_plots": (9.1, 3.7, "Plots and\nmontage"),
-        "eval_report": (7.2, 3.7, "Reliability\nreport"),
-        "eval_release": (5.2, 3.7, "Clean GitHub\nrelease"),
+        "input_data": (0.9, 6.2, "Local Push-T\nHDF5"),
+        "model_cache": (2.7, 6.2, "Build V-JEPA2\nlatent cache"),
+        "model_passive": (4.7, 6.8, "Passive skill\ntraining"),
+        "model_low10": (6.8, 6.8, "Low-level WM\n10% labels"),
+        "model_low100": (6.8, 5.6, "Low-level WM\n100% labels"),
+        "model_joint": (8.9, 6.5, "Joint finetune\n10% labels"),
+        "eval_goals": (4.7, 5.0, "Goal mode before rollout\ntask or trajectory"),
+        "eval_joint": (10.9, 6.5, "Forced eval\njoint ckpt"),
+        "eval_low": (8.9, 4.7, "Forced eval\nlow-level ckpts"),
+        "planner_flat": (12.8, 7.0, "Joint flat\nplanner"),
+        "planner_hier": (12.8, 6.1, "Joint hierarchical\nplanner"),
+        "planner_random": (12.8, 5.2, "Random-skill\nablation"),
+        "planner_lowflat": (12.8, 4.3, "Labeled-only\nflat baselines"),
+        "eval_metrics": (13.7, 3.3, "Coverage primary\nplus pose diagnostic"),
+        "eval_plots": (11.6, 2.7, "Aggregate CSV\nand plots"),
+        "eval_report": (9.4, 2.7, "Reliability\nreport"),
+        "eval_release": (7.2, 2.7, "Tracked release\nartifacts"),
     }
     flow_edges = [
         ("input_data", "model_cache"),
         ("model_cache", "model_passive"),
-        ("model_cache", "model_low"),
+        ("model_passive", "model_low10"),
+        ("model_passive", "model_low100"),
+        ("model_low10", "model_joint"),
         ("model_passive", "model_joint"),
-        ("model_low", "model_joint"),
-        ("model_joint", "eval_online"),
-        ("eval_online", "planner_flat"),
-        ("eval_online", "planner_hier"),
-        ("eval_online", "planner_random"),
-        ("planner_flat", "eval_gate"),
-        ("planner_hier", "eval_gate"),
-        ("planner_random", "eval_gate"),
-        ("eval_gate", "eval_metrics"),
-        ("eval_gate", "eval_diag"),
+        ("model_cache", "eval_goals"),
+        ("eval_goals", "eval_joint"),
+        ("eval_goals", "eval_low"),
+        ("model_joint", "eval_joint"),
+        ("model_low10", "eval_low"),
+        ("model_low100", "eval_low"),
+        ("eval_joint", "planner_flat"),
+        ("eval_joint", "planner_hier"),
+        ("eval_joint", "planner_random"),
+        ("eval_low", "planner_lowflat"),
+        ("planner_flat", "eval_metrics"),
+        ("planner_hier", "eval_metrics"),
+        ("planner_random", "eval_metrics"),
+        ("planner_lowflat", "eval_metrics"),
         ("eval_metrics", "eval_plots"),
-        ("eval_diag", "eval_plots"),
         ("eval_plots", "eval_report"),
         ("eval_report", "eval_release"),
     ]
@@ -234,6 +255,31 @@ def summarize_records(records: list[dict]) -> dict[str, dict[str, float]]:
     return out
 
 
+def strip_success_aliases(summary: dict) -> dict:
+    summary.setdefault("deterministic_timing", False)
+    summary["success_semantics"] = (
+        "coverage_success and coverage_success_rate are Push-T coverage metrics; "
+        "goal_state_success is diagnostic only"
+    )
+    for method in ["flat", "hierarchical", "random_hierarchical"]:
+        payload = summary.get(method)
+        if not isinstance(payload, dict):
+            continue
+        if "coverage_success_rate" not in payload and "success_rate" in payload:
+            payload["coverage_success_rate"] = payload["success_rate"]
+        if "goal_state_success_rate" in payload:
+            payload["goal_state_success_diagnostic_rate"] = payload.pop("goal_state_success_rate")
+        payload.pop("success_rate", None)
+        payload["goal_state_success_is_task_metric"] = False
+        for record in payload.get("records", []):
+            record.pop("success", None)
+    return summary
+
+
+def strip_success_column(rows: list[dict]) -> list[dict]:
+    return [{key: value for key, value in row.items() if key != "success"} for row in rows]
+
+
 def _legacy_video_path(method: str, old_path: str | None) -> str | None:
     if not old_path:
         return None
@@ -251,8 +297,16 @@ def sanitize_locked_in_place(records: list[dict], summary: dict[str, dict[str, f
         payload["cache_path"] = "external/legacy_debug_cache.h5"
         payload["checkpoint"] = "external/legacy_debug_joint_best.pt"
         payload["external_inputs_not_committed"] = True
+        payload["legacy_artifact"] = True
         payload["coverage_threshold"] = 0.95
-        payload["success_semantics"] = "success and success_rate are coverage-success after reliability re-score"
+        payload["goal_mode"] = "trajectory"
+        payload["task_success_claim_supported"] = False
+        payload["deterministic_timing"] = False
+        payload["unique_episode_count"] = int(max((row["unique_episodes"] for row in summary.values()), default=0))
+        payload["provenance"] = {
+            "warnings": ["Legacy locked artifact predates the current strict provenance schema; external inputs are not committed"]
+        }
+        payload["success_semantics"] = "coverage_success and coverage_success_rate are coverage metrics after reliability re-score"
         for method, method_summary in summary.items():
             if method not in payload:
                 continue
@@ -262,14 +316,15 @@ def sanitize_locked_in_place(records: list[dict], summary: dict[str, dict[str, f
             payload[method]["goal_state_success_is_task_metric"] = False
             payload[method]["goal_state_success_scope"] = "trajectory_full_state_diagnostic"
             payload[method]["unique_episode_count"] = int(method_summary["unique_episodes"])
-            payload[method]["success_rate"] = method_summary["coverage_success_rate"]
+            payload[method].pop("success_rate", None)
             for record in payload[method].get("records", []):
                 old_success = bool(record.get("success", False))
                 coverage_success = bool(float(record.get("max_coverage", 0.0)) >= 0.95)
                 record["goal_state_success"] = old_success
                 record["coverage_success"] = coverage_success
-                record["success"] = coverage_success
+                record.pop("success", None)
                 record["video_path"] = _legacy_video_path(method, record.get("video_path"))
+        strip_success_aliases(payload)
         summary_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
     sanitized_records = []
@@ -449,7 +504,18 @@ def copy_phase_a_if_present(ingest_local_outputs: bool = False) -> dict | None:
         artifact_summary = PHASE_A_ARTIFACT / "pusht_online_eval.json"
         if artifact_summary.exists():
             with open(artifact_summary, "r", encoding="utf-8") as handle:
-                return json.load(handle)
+                summary = strip_success_aliases(json.load(handle))
+            artifact_summary.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+            artifact_records = PHASE_A_ARTIFACT / "pusht_online_records.csv"
+            if artifact_records.exists():
+                with open(artifact_records, "r", encoding="utf-8", newline="") as handle:
+                    rows = strip_success_column(list(csv.DictReader(handle)))
+                if rows:
+                    with open(artifact_records, "w", encoding="utf-8", newline="") as handle:
+                        writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
+                        writer.writeheader()
+                        writer.writerows(rows)
+            return summary
         return None
     ensure_dir(PHASE_A_ARTIFACT)
     with open(summary_path, "r", encoding="utf-8") as handle:
@@ -458,7 +524,8 @@ def copy_phase_a_if_present(ingest_local_outputs: bool = False) -> dict | None:
     summary["code_commit_semantics"] = "code_commit records the evaluator source commit at run time; the artifact commit is necessarily later"
     summary["cache_path"] = "external/phase_a_debug_cache.h5"
     summary["checkpoint"] = "external/phase_a_debug_joint_best.pt"
-    summary["success_semantics"] = "success and success_rate are Push-T coverage_success; goal_state_success is diagnostic only"
+    summary.setdefault("deterministic_timing", False)
+    summary["success_semantics"] = "coverage_success and coverage_success_rate are Push-T coverage metrics; goal_state_success is diagnostic only"
     summary.setdefault("portable_paths", {})["cache_path"] = "external/phase_a_debug_cache.h5"
     summary.setdefault("portable_paths", {})["checkpoint"] = "external/phase_a_debug_joint_best.pt"
     summary.setdefault("portable_paths", {})["projector"] = "external/phase_a_debug_state_projector.pt"
@@ -492,10 +559,13 @@ def copy_phase_a_if_present(ingest_local_outputs: bool = False) -> dict | None:
             video_path = record.get("video_path")
             if video_path:
                 record["video_path"] = video_map.get(video_path, f"{PHASE_A_ARTIFACT.relative_to(ROOT).as_posix()}/videos/{method}/{Path(video_path).name}")
+            record.pop("success", None)
+        summary[method].pop("success_rate", None)
+    strip_success_aliases(summary)
     (PHASE_A_ARTIFACT / "pusht_online_eval.json").write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
 
     with open(records_path, "r", encoding="utf-8", newline="") as handle:
-        rows = list(csv.DictReader(handle))
+        rows = strip_success_column(list(csv.DictReader(handle)))
     if rows:
         with open(PHASE_A_ARTIFACT / "pusht_online_records.csv", "w", encoding="utf-8", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
@@ -565,7 +635,7 @@ def write_report(summary: dict[str, dict[str, float]], plots: dict[str, Path], m
     lines.extend(
         [
             "",
-            "The old `success_rate` column measured sampled-trajectory goal-state success, not standard Push-T coverage success.",
+            "Legacy pre-rescore outputs used `success_rate` for sampled-trajectory goal-state success; current tracked eval exports use coverage-specific names.",
             phase_a_text,
             *phase_a_table,
             "",
@@ -605,7 +675,7 @@ def write_report(summary: dict[str, dict[str, float]], plots: dict[str, Path], m
             plt.close(fig)
         fig, ax = plt.subplots(figsize=(11, 7.2))
         ax.set_axis_off()
-        table_text = "\n".join(lines[:16] + ["", phase_a_text] + phase_a_table)
+        table_text = "\n".join(lines[:16] + phase_a_table)
         ax.text(0.02, 0.98, table_text, va="top", family="monospace", fontsize=10)
         pdf.savefig(fig, bbox_inches="tight")
         plt.close(fig)

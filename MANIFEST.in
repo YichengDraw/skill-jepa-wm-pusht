@@ -2,7 +2,7 @@ include README.md
 include LICENSE
 include THIRD-PARTY-LICENSES.md
 include requirements.txt
-recursive-include artifacts *.csv *.gif *.json *.md *.pdf *.png *.svg *.tex *.yaml
+recursive-include artifacts *.csv *.gif *.json *.md *.pdf *.png *.svg *.yaml
 recursive-include configs *.yaml
 recursive-include docs *.md *.mmd *.png *.svg
 recursive-include tests *.py

@@ -9,7 +9,8 @@ from torch.utils.data import DataLoader
 
 from skill_jepa.data import FeatureSequenceDataset
 from skill_jepa.trainers.common import (
-    DATA_PROVENANCE_KEYS,
+    LOW_LEVEL_DATA_PROVENANCE_KEYS,
+    PASSIVE_DATA_PROVENANCE_KEYS,
     assert_checkpoint_config_compatible,
     build_all_modules,
     load_checkpoint,
@@ -139,7 +140,7 @@ def main() -> None:
             passive_payload,
             cfg,
             label="Passive checkpoint",
-            data_value_keys=DATA_PROVENANCE_KEYS,
+            data_value_keys=PASSIVE_DATA_PROVENANCE_KEYS,
         )
     if cfg["training"].get("low_level_checkpoint"):
         if not cfg["training"].get("passive_checkpoint"):
@@ -153,7 +154,7 @@ def main() -> None:
             low_level_payload,
             cfg,
             label="Low-level checkpoint",
-            data_value_keys=DATA_PROVENANCE_KEYS,
+            data_value_keys=LOW_LEVEL_DATA_PROVENANCE_KEYS,
         )
         _assert_low_level_passive_lineage(cfg, low_level_payload)
     modules_to_device(modules, device)

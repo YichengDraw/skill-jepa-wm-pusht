@@ -38,7 +38,7 @@ This is a focused experimental snapshot, not a full mirror of the upstream JEPA-
 ## Installation
 
 Python `3.10` or `3.11` is the target version.
-The end-to-end cache, training, evaluation, and report-refresh commands assume a source checkout. Wheel builds are used as import/install checks for the Python modules and CLI packages; large data, generated caches, checkpoints, and release artifacts live in the repository layout.
+The end-to-end cache, training, evaluation, and report-refresh commands assume a source checkout. Wheel builds are import/install checks for the Python modules and CLI packages. They are not standalone experiment bundles because raw HDF5 files, generated caches, checkpoints, and large logs are intentionally excluded from git.
 
 ```bash
 git clone https://github.com/YichengDraw/skill-jepa-wm-pusht.git
@@ -54,6 +54,8 @@ If you prefer a lighter install for this Push-T line only:
 pip install -r requirements.txt
 pip install -e .
 ```
+
+Dependency ranges are bounded to reduce simulator/numeric drift. Exact result replay also requires the artifact hashes recorded in each evaluation JSON.
 
 ## Data Preparation
 
@@ -140,8 +142,6 @@ The key runtime path is: raw Push-T HDF5 frames/actions/states -> causal two-fra
 
 ### Historical debug status
 
-From `artifacts/pusht_debug/EXPERIMENT_STATUS.md`:
-
 - Historical diagnostic setting: `K=4`, `goal_gap=24`, `max_episode_steps=32`, `execute_actions_per_plan=4`
 - The old sampled-goal numbers are archived as trajectory diagnostics.
 - They are excluded from the public headline path for Push-T task success.
@@ -159,7 +159,7 @@ From `artifacts/release/skill_jepa_wm_reliability_report.md`:
 
 Interpretation:
 
-- The old `success_rate` column measured sampled-trajectory goal-state success, not standard Push-T coverage success.
+- Legacy pre-rescore outputs used `success_rate` for sampled-trajectory goal-state success; current tracked eval exports use coverage-specific names.
 - The legacy locked artifact has repeated sampled pairs from one unique episode.
 - Hierarchy improves sampled-state distance and planning latency in that artifact.
 - The artifact uses trajectory-goal planning targets. It does not support a standard Push-T task-success claim.

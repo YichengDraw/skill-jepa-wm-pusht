@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 
 from skill_jepa.data import FeatureSequenceDataset
 from skill_jepa.trainers.common import (
-    DATA_PROVENANCE_KEYS,
+    PASSIVE_DATA_PROVENANCE_KEYS,
     assert_checkpoint_config_compatible,
     build_low_level_modules,
     build_skill_modules,
@@ -117,7 +117,7 @@ def main() -> None:
             passive_payload,
             cfg,
             label="Passive checkpoint",
-            data_value_keys=DATA_PROVENANCE_KEYS,
+            data_value_keys=PASSIVE_DATA_PROVENANCE_KEYS,
         )
     _freeze(modules, ["skill_idm", "skill_wm", "skill_prior", "skill_proj", "effect_proj"])
     modules_to_device(modules, device)

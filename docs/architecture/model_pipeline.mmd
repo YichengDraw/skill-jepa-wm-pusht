@@ -10,9 +10,13 @@ flowchart TD
   actions --> actionenc["ActionChunkEncoder"]
   skill --> highcem["HighLevelCEM: skill sequence to subgoal z"]
   highcem --> resolver["Train-split nearest cached s"]
-  resolver --> lowcem["LowLevelCEM: action sequence"]
-  lowwm --> lowcem
-  actionenc --> lowcem
-  lowcem --> env["Execute first actions in PushTEnv"]
+  resolver --> hierlow["Hierarchical LowLevelCEM"]
+  s --> flatlow["Flat LowLevelCEM with goal_s"]
+  lowwm --> hierlow
+  lowwm --> flatlow
+  actionenc --> hierlow
+  actionenc --> flatlow
+  hierlow --> env["Execute first actions in PushTEnv"]
+  flatlow --> env
   env --> live["Live visual observation"]
   live --> clips

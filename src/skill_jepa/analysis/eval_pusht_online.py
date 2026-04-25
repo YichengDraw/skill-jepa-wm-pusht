@@ -24,7 +24,8 @@ from skill_jepa.envs.pusht_env import pymunk_to_shapely
 from skill_jepa.encoders import FrozenVJEPA2Encoder
 from skill_jepa.modules import StateProjector
 from skill_jepa.planning import HighLevelCEMPlanner, HierarchicalPlanner, LowLevelCEMPlanner, RandomHighLevelPlanner
-from skill_jepa.trainers.common import build_all_modules, load_checkpoint, modules_to_device
+from skill_jepa.trainers.common import build_all_modules, git_status_sha256 as _repo_git_status_sha256
+from skill_jepa.trainers.common import load_checkpoint, modules_to_device
 from skill_jepa.utils import dump_json, ensure_dir, load_yaml, seed_everything
 
 
@@ -41,7 +42,6 @@ class OnlineEvalRecord:
     goal_episode_id: int
     goal_mode: str
     sampled_goal_gap: int
-    success: bool
     coverage_success: bool
     goal_state_success: bool
     state_dist: float
@@ -125,10 +125,7 @@ def _git_dirty() -> bool | None:
 
 
 def _git_status_sha256() -> str | None:
-    status = _git_status_porcelain()
-    if status is None:
-        return None
-    return hashlib.sha256(status.encode("utf-8")).hexdigest()
+    return _repo_git_status_sha256()
 
 
 def _portable_path(path: str | Path | None) -> str | None:
@@ -479,7 +476,6 @@ def _run_episode(
         goal_episode_id=goal_episode_id,
         goal_mode=goal_mode,
         sampled_goal_gap=goal_index - start_index if goal_episode_id == episode_id else -1,
-        success=coverage_success,
         coverage_success=coverage_success,
         goal_state_success=bool(final_metrics["goal_state_success"]),
         state_dist=float(final_metrics["state_dist"]),
@@ -517,7 +513,6 @@ def _write_records_csv(path: Path, records_by_method: dict[str, list[dict]]) -> 
         "goal_episode_id",
         "goal_mode",
         "sampled_goal_gap",
-        "success",
         "coverage_success",
         "goal_state_success",
         "state_dist",
@@ -603,9 +598,6 @@ def _summarize_method_records(method_records: list[dict], goal_state_scope: str)
         if method_records
         else 0.0,
         "state_dist": float(np.mean([record["state_dist"] for record in method_records])) if method_records else 0.0,
-        "success_rate": float(np.mean([record["coverage_success"] for record in method_records]))
-        if method_records
-        else 0.0,
         "coverage_success_rate": float(np.mean([record["coverage_success"] for record in method_records]))
         if method_records
         else 0.0,
@@ -625,6 +617,7 @@ def _task_success_claim_supported(
     allow_replacement: bool,
     allow_under_sampling: bool,
     allow_split_fallback: bool,
+    subgoal_scope: str,
 ) -> bool:
     return bool(
         goal_mode == "task"
@@ -634,6 +627,7 @@ def _task_success_claim_supported(
         and not allow_replacement
         and not allow_under_sampling
         and not allow_split_fallback
+        and subgoal_scope in {"train", "none"}
     )
 
 
@@ -918,10 +912,11 @@ def main() -> None:
         "mode": args.mode,
         "num_eval_episodes": len(goal_pairs),
         "requested_num_eval_episodes": int(planner_cfg["num_eval_episodes"]),
+        "deterministic_timing": bool(args.deterministic_timing),
         "split_seed": split_seed,
         "eval_seed": eval_seed,
         "task_goal_seed": task_goal_seed if args.goal_mode == "task" else None,
-        "success_semantics": "success and success_rate are Push-T coverage_success; goal_state_success is diagnostic only",
+        "success_semantics": "coverage_success and coverage_success_rate are Push-T coverage metrics; goal_state_success is diagnostic only",
         "task_success_claim_supported": _task_success_claim_supported(
             goal_mode=args.goal_mode,
             actual_split=str(split_summary["eval_split"]),
@@ -931,6 +926,7 @@ def main() -> None:
             allow_replacement=bool(args.allow_replacement),
             allow_under_sampling=bool(args.allow_under_sampling),
             allow_split_fallback=bool(args.allow_split_fallback),
+            subgoal_scope=str(args.subgoal_scope),
         ),
         "unique_episode_count": unique_episode_count,
         "allow_replacement": bool(args.allow_replacement),
