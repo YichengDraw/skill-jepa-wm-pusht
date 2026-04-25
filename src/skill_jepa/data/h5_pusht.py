@@ -156,6 +156,7 @@ class EpisodeGoalSampler:
         test_fraction: float = 0.05,
         seed: int = 0,
         goal_gap: int = 16,
+        fallback_empty_split: bool = False,
     ) -> None:
         self.cache_path = str(cache_path)
         self.goal_gap = goal_gap
@@ -167,6 +168,11 @@ class EpisodeGoalSampler:
         self.actual_split = split
         self.episode_ids = splits[split]
         if len(self.episode_ids) == 0:
+            if not fallback_empty_split:
+                raise ValueError(
+                    f"Requested split {split!r} has no episodes. "
+                    "Use fallback_empty_split=True only for explicit debug fallback."
+                )
             self.actual_split = "val" if len(splits["val"]) > 0 else "train"
             self.episode_ids = splits[self.actual_split]
 

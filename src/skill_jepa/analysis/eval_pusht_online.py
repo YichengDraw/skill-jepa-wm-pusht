@@ -18,8 +18,8 @@ import torch
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
-from evals.simu_env_planning.envs.pusht_env.pusht_env import PushTEnv
 from skill_jepa.data import EpisodeGoalSampler, cache_metadata, split_episode_ids
+from skill_jepa.envs import PushTEnv
 from skill_jepa.encoders import FrozenVJEPA2Encoder
 from skill_jepa.modules import StateProjector
 from skill_jepa.planning import HighLevelCEMPlanner, HierarchicalPlanner, LowLevelCEMPlanner, RandomHighLevelPlanner
@@ -147,12 +147,12 @@ class NearestSubgoalResolver:
 
 
 def _goal_state_eval(goal_state: np.ndarray, cur_state: np.ndarray) -> dict[str, float | bool]:
-    pose_goal = goal_state[:5]
-    pose_cur = cur_state[:5]
-    pos_diff = float(np.linalg.norm(pose_goal[:4] - pose_cur[:4]))
-    angle_delta = float(pose_cur[4] - pose_goal[4])
+    block_goal = goal_state[2:5]
+    block_cur = cur_state[2:5]
+    pos_diff = float(np.linalg.norm(block_goal[:2] - block_cur[:2]))
+    angle_delta = float(block_cur[2] - block_goal[2])
     angle_diff = float(abs((angle_delta + np.pi) % (2 * np.pi) - np.pi))
-    pose_delta = np.concatenate([pose_goal[:4] - pose_cur[:4], np.asarray([angle_diff], dtype=np.float32)])
+    pose_delta = np.concatenate([block_goal[:2] - block_cur[:2], np.asarray([angle_diff], dtype=np.float32)])
     return {
         "goal_state_success": bool(pos_diff < 20.0 and angle_diff < (np.pi / 9.0)),
         "state_dist": float(np.linalg.norm(pose_delta)),
@@ -414,6 +414,27 @@ def _write_records_csv(path: Path, records_by_method: dict[str, list[dict]]) -> 
                 writer.writerow({"method": method, **record})
 
 
+def _prepare_output_dir(out_dir: Path, force: bool) -> None:
+    stale_targets = [out_dir / name for name in ["pusht_online_eval.json", "pusht_online_records.csv", "videos"]]
+    existing = [target for target in stale_targets if target.exists()]
+    if existing and not force:
+        existing_names = ", ".join(target.name for target in existing)
+        raise FileExistsError(f"Refusing to reuse existing eval outputs without --force: {existing_names}")
+    if force:
+        for target in stale_targets:
+            if target.is_dir():
+                shutil.rmtree(target)
+            elif target.exists():
+                target.unlink()
+
+
+def _eval_split_summary_fields(sampler: EpisodeGoalSampler, requested_split: str) -> dict[str, str]:
+    return {
+        "eval_split": getattr(sampler, "actual_split", requested_split),
+        "requested_eval_split": getattr(sampler, "requested_split", requested_split),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True, type=str)
@@ -433,6 +454,7 @@ def main() -> None:
     parser.add_argument("--video-fps", type=int, default=6)
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--allow-replacement", action="store_true")
+    parser.add_argument("--allow-split-fallback", action="store_true")
     parser.add_argument("--min-unique-episodes", type=int, default=0)
     parser.add_argument("--deterministic-timing", action="store_true")
     parser.add_argument("--subgoal-scope", choices=["train", "all", "none"], default="train")
@@ -441,15 +463,7 @@ def main() -> None:
     cfg = load_yaml(args.config)
     seed_everything(int(cfg["seed"]))
     out_dir = ensure_dir(args.output)
-    if (Path(out_dir) / "pusht_online_eval.json").exists() and not args.force:
-        raise FileExistsError(f"Refusing to overwrite existing eval output without --force: {out_dir}")
-    if args.force:
-        for name in ["pusht_online_eval.json", "pusht_online_records.csv", "videos"]:
-            target = Path(out_dir) / name
-            if target.is_dir():
-                shutil.rmtree(target)
-            elif target.exists():
-                target.unlink()
+    _prepare_output_dir(Path(out_dir), force=bool(args.force))
     device = torch.device(cfg.get("device", "cuda" if torch.cuda.is_available() else "cpu"))
 
     planner_cfg = dict(cfg["planner"])
@@ -491,6 +505,7 @@ def main() -> None:
         test_fraction=cfg["data"]["test_fraction"],
         seed=cfg["seed"],
         goal_gap=planner_cfg["goal_gap"],
+        fallback_empty_split=bool(args.allow_split_fallback),
     )
     goal_pairs = sampler.sample(
         planner_cfg["num_eval_episodes"],
@@ -498,7 +513,7 @@ def main() -> None:
         max_goal_gap=planner_cfg.get("max_episode_steps"),
         allow_replacement=args.allow_replacement,
     )
-    actual_eval_split = getattr(sampler, "actual_split", eval_split)
+    split_summary = _eval_split_summary_fields(sampler, eval_split)
     unique_episode_count = len({int(pair["episode_id"]) for pair in goal_pairs})
     if unique_episode_count < int(args.min_unique_episodes):
         raise RuntimeError(
@@ -528,8 +543,7 @@ def main() -> None:
         },
         "code_commit": _git_commit(),
         "coverage_threshold": coverage_threshold,
-        "eval_split": actual_eval_split,
-        "requested_eval_split": eval_split,
+        **split_summary,
         "execute_actions_per_plan": execute_actions_per_plan,
         "goal_gap": int(planner_cfg["goal_gap"]),
         "max_episode_steps": int(planner_cfg["max_episode_steps"]),
@@ -538,6 +552,7 @@ def main() -> None:
         "requested_num_eval_episodes": int(planner_cfg["num_eval_episodes"]),
         "unique_episode_count": unique_episode_count,
         "allow_replacement": bool(args.allow_replacement),
+        "allow_split_fallback": bool(args.allow_split_fallback),
         "subgoal_scope": args.subgoal_scope,
     }
     try:

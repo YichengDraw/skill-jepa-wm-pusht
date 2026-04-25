@@ -9,10 +9,13 @@ from torch import nn
 from skill_jepa.analysis.eval_pusht_online import (
     NearestSubgoalResolver,
     _coverage_success,
+    _eval_split_summary_fields,
     _goal_state_eval,
+    _prepare_output_dir,
     _set_eval_seed,
 )
 from skill_jepa.data import EpisodeGoalSampler
+from skill_jepa.envs import PushTEnv
 from skill_jepa.trainers.common import load_checkpoint
 
 
@@ -48,14 +51,82 @@ def test_goal_sampler_replacement_is_explicit(tmp_path: Path):
     assert len({int(pair["episode_id"]) for pair in with_replacement}) <= 3
 
 
-def test_goal_sampler_records_actual_split_after_fallback(tmp_path: Path):
+def test_goal_sampler_rejects_empty_requested_split_by_default(tmp_path: Path):
     cache_path = tmp_path / "cache.h5"
     _write_goal_cache(cache_path, np.array([6, 6], dtype=np.int32))
-    sampler = EpisodeGoalSampler(cache_path, split="test", val_fraction=0.5, test_fraction=0.5, seed=0, goal_gap=1)
+
+    with pytest.raises(ValueError, match="Requested split 'test' has no episodes"):
+        EpisodeGoalSampler(cache_path, split="test", val_fraction=0.5, test_fraction=0.5, seed=0, goal_gap=1)
+
+
+def test_goal_sampler_records_actual_split_after_explicit_fallback(tmp_path: Path):
+    cache_path = tmp_path / "cache.h5"
+    _write_goal_cache(cache_path, np.array([6, 6], dtype=np.int32))
+    sampler = EpisodeGoalSampler(
+        cache_path,
+        split="test",
+        val_fraction=0.5,
+        test_fraction=0.5,
+        seed=0,
+        goal_gap=1,
+        fallback_empty_split=True,
+    )
 
     assert sampler.requested_split == "test"
     assert sampler.actual_split == "val"
     assert len(sampler.episode_ids) == 1
+
+
+def test_goal_sampler_records_train_fallback_when_eval_splits_empty(tmp_path: Path):
+    cache_path = tmp_path / "cache.h5"
+    _write_goal_cache(cache_path, np.array([6, 6], dtype=np.int32))
+    sampler = EpisodeGoalSampler(
+        cache_path,
+        split="test",
+        val_fraction=0.0,
+        test_fraction=0.0,
+        seed=0,
+        goal_gap=1,
+        fallback_empty_split=True,
+    )
+
+    assert sampler.requested_split == "test"
+    assert sampler.actual_split == "train"
+    assert len(sampler.episode_ids) == 2
+
+
+def test_eval_split_summary_records_requested_and_actual_split(tmp_path: Path):
+    cache_path = tmp_path / "cache.h5"
+    _write_goal_cache(cache_path, np.array([6, 6], dtype=np.int32))
+    sampler = EpisodeGoalSampler(
+        cache_path,
+        split="test",
+        val_fraction=0.5,
+        test_fraction=0.5,
+        seed=0,
+        goal_gap=1,
+        fallback_empty_split=True,
+    )
+
+    fields = _eval_split_summary_fields(sampler, "test")
+
+    assert fields == {"requested_eval_split": "test", "eval_split": "val"}
+
+
+def test_package_discovery_keeps_runtime_import_roots():
+    import tomllib
+
+    pyproject_path = Path(__file__).resolve().parents[2] / "pyproject.toml"
+    pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+
+    include = set(pyproject["tool"]["setuptools"]["packages"]["find"]["include"])
+    where = pyproject["tool"]["setuptools"]["packages"]["find"]["where"]
+    assert where == ["src"]
+    assert include == {"skill_jepa*"}
+
+
+def test_pusht_env_is_packaged_under_skill_jepa_namespace():
+    assert PushTEnv.__name__ == "PushTEnv"
 
 
 def test_success_metrics_keep_coverage_primary():
@@ -67,6 +138,16 @@ def test_success_metrics_keep_coverage_primary():
     metrics = _goal_state_eval(goal, current)
     assert metrics["goal_state_success"]
     assert metrics["state_dist"] > 0.0
+
+
+def test_goal_state_diagnostic_uses_block_pose_not_agent_position():
+    goal = np.array([0.0, 0.0, 200.0, 200.0, 0.0], dtype=np.float32)
+    current = np.array([500.0, 500.0, 202.0, 199.0, 0.01], dtype=np.float32)
+
+    metrics = _goal_state_eval(goal, current)
+
+    assert metrics["goal_state_success"]
+    assert metrics["state_dist"] < 3.0
 
 
 def test_goal_state_angle_distance_wraps_periodically():
@@ -99,6 +180,42 @@ def test_strict_checkpoint_loading_rejects_missing_modules(tmp_path: Path):
 
     with pytest.raises(RuntimeError, match="missing required modules"):
         load_checkpoint(checkpoint, modules, strict_modules=True)
+
+
+def test_strict_checkpoint_loading_rejects_unexpected_modules(tmp_path: Path):
+    checkpoint = tmp_path / "checkpoint.pt"
+    torch.save(
+        {"modules": {"present": nn.Linear(1, 1).state_dict(), "stale_extra": nn.Linear(1, 1).state_dict()}},
+        checkpoint,
+    )
+    modules = {"present": nn.Linear(1, 1)}
+
+    with pytest.raises(RuntimeError, match="unexpected modules"):
+        load_checkpoint(checkpoint, modules, strict_modules=True)
+
+
+def test_prepare_output_dir_rejects_partial_stale_outputs(tmp_path: Path):
+    out_dir = tmp_path / "eval"
+    out_dir.mkdir()
+    (out_dir / "pusht_online_records.csv").write_text("stale", encoding="utf-8")
+
+    with pytest.raises(FileExistsError, match="pusht_online_records.csv"):
+        _prepare_output_dir(out_dir, force=False)
+
+
+def test_prepare_output_dir_force_removes_known_outputs(tmp_path: Path):
+    out_dir = tmp_path / "eval"
+    video_dir = out_dir / "videos"
+    video_dir.mkdir(parents=True)
+    (out_dir / "pusht_online_eval.json").write_text("{}", encoding="utf-8")
+    (out_dir / "pusht_online_records.csv").write_text("stale", encoding="utf-8")
+    (video_dir / "episode.gif").write_text("stale", encoding="utf-8")
+
+    _prepare_output_dir(out_dir, force=True)
+
+    assert not (out_dir / "pusht_online_eval.json").exists()
+    assert not (out_dir / "pusht_online_records.csv").exists()
+    assert not video_dir.exists()
 
 
 def test_subgoal_resolver_respects_allowed_indices(tmp_path: Path):

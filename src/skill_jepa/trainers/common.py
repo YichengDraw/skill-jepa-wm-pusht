@@ -112,6 +112,9 @@ def load_checkpoint(
         missing_modules = sorted(set(modules) - set(checkpoint_modules))
         if missing_modules:
             raise RuntimeError(f"Checkpoint is missing required modules: {missing_modules}")
+        unexpected_modules = sorted(set(checkpoint_modules) - set(modules))
+        if unexpected_modules:
+            raise RuntimeError(f"Checkpoint has unexpected modules: {unexpected_modules}")
     for name, module in modules.items():
         if name in checkpoint_modules:
             incompatible = module.load_state_dict(checkpoint_modules[name], strict=strict_modules)

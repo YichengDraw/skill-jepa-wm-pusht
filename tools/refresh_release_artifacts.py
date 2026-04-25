@@ -569,7 +569,7 @@ def write_report(summary: dict[str, dict[str, float]], plots: dict[str, Path], m
             plt.close(fig)
         fig, ax = plt.subplots(figsize=(11, 7.2))
         ax.set_axis_off()
-        table_text = "\n".join(lines[:16] + ["", phase_a_text])
+        table_text = "\n".join(lines[:16] + ["", phase_a_text] + phase_a_table)
         ax.text(0.02, 0.98, table_text, va="top", family="monospace", fontsize=10)
         pdf.savefig(fig, bbox_inches="tight")
         plt.close(fig)
