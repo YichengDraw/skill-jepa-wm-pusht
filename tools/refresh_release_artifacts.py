@@ -426,6 +426,10 @@ def copy_phase_a_if_present() -> dict | None:
     summary_path = PHASE_A_OUTPUT / "pusht_online_eval.json"
     records_path = PHASE_A_OUTPUT / "pusht_online_records.csv"
     if not summary_path.exists() or not records_path.exists():
+        artifact_summary = PHASE_A_ARTIFACT / "pusht_online_eval.json"
+        if artifact_summary.exists():
+            with open(artifact_summary, "r", encoding="utf-8") as handle:
+                return json.load(handle)
         return None
     ensure_dir(PHASE_A_ARTIFACT)
     with open(summary_path, "r", encoding="utf-8") as handle:
@@ -486,6 +490,8 @@ def write_report(summary: dict[str, dict[str, float]], plots: dict[str, Path], m
         phase_a_text = (
             f"Phase A fresh eval: {phase_a.get('num_eval_episodes', 0)} sampled pairs, "
             f"{phase_a.get('unique_episode_count', 0)} unique episodes, "
+            f"requested_split={phase_a.get('requested_eval_split', phase_a.get('eval_split'))}, "
+            f"actual_split={phase_a.get('eval_split')}, "
             f"subgoal_scope={phase_a.get('subgoal_scope')}."
         )
         phase_a_table = [

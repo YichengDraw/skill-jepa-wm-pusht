@@ -163,9 +163,12 @@ class EpisodeGoalSampler:
             self.ep_offset = handle["ep_offset"][:]
             self.ep_len = handle["ep_len"][:]
         splits = split_episode_ids(len(self.ep_len), val_fraction, test_fraction, seed)
+        self.requested_split = split
+        self.actual_split = split
         self.episode_ids = splits[split]
         if len(self.episode_ids) == 0:
-            self.episode_ids = splits["val"] if len(splits["val"]) > 0 else splits["train"]
+            self.actual_split = "val" if len(splits["val"]) > 0 else "train"
+            self.episode_ids = splits[self.actual_split]
 
     def sample(
         self,

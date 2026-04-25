@@ -150,11 +150,12 @@ def _goal_state_eval(goal_state: np.ndarray, cur_state: np.ndarray) -> dict[str,
     pose_goal = goal_state[:5]
     pose_cur = cur_state[:5]
     pos_diff = float(np.linalg.norm(pose_goal[:4] - pose_cur[:4]))
-    angle_diff = float(np.abs(goal_state[4] - cur_state[4]))
-    angle_diff = float(min(angle_diff, 2 * np.pi - angle_diff))
+    angle_delta = float(pose_cur[4] - pose_goal[4])
+    angle_diff = float(abs((angle_delta + np.pi) % (2 * np.pi) - np.pi))
+    pose_delta = np.concatenate([pose_goal[:4] - pose_cur[:4], np.asarray([angle_diff], dtype=np.float32)])
     return {
         "goal_state_success": bool(pos_diff < 20.0 and angle_diff < (np.pi / 9.0)),
-        "state_dist": float(np.linalg.norm(pose_goal - pose_cur)),
+        "state_dist": float(np.linalg.norm(pose_delta)),
     }
 
 
@@ -497,6 +498,7 @@ def main() -> None:
         max_goal_gap=planner_cfg.get("max_episode_steps"),
         allow_replacement=args.allow_replacement,
     )
+    actual_eval_split = getattr(sampler, "actual_split", eval_split)
     unique_episode_count = len({int(pair["episode_id"]) for pair in goal_pairs})
     if unique_episode_count < int(args.min_unique_episodes):
         raise RuntimeError(
@@ -526,7 +528,8 @@ def main() -> None:
         },
         "code_commit": _git_commit(),
         "coverage_threshold": coverage_threshold,
-        "eval_split": eval_split,
+        "eval_split": actual_eval_split,
+        "requested_eval_split": eval_split,
         "execute_actions_per_plan": execute_actions_per_plan,
         "goal_gap": int(planner_cfg["goal_gap"]),
         "max_episode_steps": int(planner_cfg["max_episode_steps"]),

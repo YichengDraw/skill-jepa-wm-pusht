@@ -48,6 +48,16 @@ def test_goal_sampler_replacement_is_explicit(tmp_path: Path):
     assert len({int(pair["episode_id"]) for pair in with_replacement}) <= 3
 
 
+def test_goal_sampler_records_actual_split_after_fallback(tmp_path: Path):
+    cache_path = tmp_path / "cache.h5"
+    _write_goal_cache(cache_path, np.array([6, 6], dtype=np.int32))
+    sampler = EpisodeGoalSampler(cache_path, split="test", val_fraction=0.5, test_fraction=0.5, seed=0, goal_gap=1)
+
+    assert sampler.requested_split == "test"
+    assert sampler.actual_split == "val"
+    assert len(sampler.episode_ids) == 1
+
+
 def test_success_metrics_keep_coverage_primary():
     assert _coverage_success({"max_coverage": 0.95}, threshold=0.95)
     assert not _coverage_success({"max_coverage": 0.949}, threshold=0.95)
@@ -57,6 +67,16 @@ def test_success_metrics_keep_coverage_primary():
     metrics = _goal_state_eval(goal, current)
     assert metrics["goal_state_success"]
     assert metrics["state_dist"] > 0.0
+
+
+def test_goal_state_angle_distance_wraps_periodically():
+    goal = np.array([0.0, 0.0, 0.0, 0.0, np.pi - 0.01], dtype=np.float32)
+    current = np.array([0.0, 0.0, 0.0, 0.0, -np.pi + 0.01], dtype=np.float32)
+
+    metrics = _goal_state_eval(goal, current)
+
+    assert metrics["goal_state_success"]
+    assert metrics["state_dist"] < 0.03
 
 
 def test_set_eval_seed_calls_environment_seed():

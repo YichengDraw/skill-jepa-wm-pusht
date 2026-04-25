@@ -100,7 +100,7 @@ Repository = "https://github.com/YichengDraw/skill-jepa-wm-pusht"
 
 [tool.setuptools.packages.find]
 where = ["src", "."]
-include = ["skill_jepa*", "evals*"]
+include = ["skill_jepa*", "evals*", "src*"]
 
 [tool.isort]
 profile = "black"
