@@ -1658,110 +1658,29 @@ def test_locked_suite_aggregate_outputs_use_coverage_success_names(tmp_path: Pat
     assert paths["coverage_success_plot"].exists()
 
 
-def test_release_sanitizer_converts_legacy_success_to_coverage_metric(tmp_path: Path, monkeypatch):
-    eval_dir = tmp_path / "locked_eval"
-    eval_dir.mkdir()
-    report_path = tmp_path / "current_best_checkpoint_comparison.csv"
-    summary_path = eval_dir / "pusht_online_eval.json"
-    records_path = eval_dir / "pusht_online_records.csv"
-    payload = {
-        "cache_path": "private/old/cache.h5",
-        "checkpoint": "private/old/joint.pt",
-        "flat": {
-            "goal_state_success_rate": 1.0,
-            "records": [
-                {
-                    "success": True,
-                    "max_coverage": 0.1,
-                    "video_path": "private/old/videos/episode_000.gif",
-                }
-            ],
-        },
-        "hierarchical": {
-            "goal_state_success_rate": 0.0,
-            "records": [
-                {
-                    "success": False,
-                    "max_coverage": 0.99,
-                    "video_path": "private/old/videos/episode_000.gif",
-                }
-            ],
-        },
-    }
-    summary_path.write_text(json.dumps(payload), encoding="utf-8")
-    records = [
-        {
-            "method": "flat",
-            "episode_idx": "0",
-            "episode_id": "2",
-            "start_index": "1",
-            "goal_index": "3",
-            "sampled_goal_gap": "2",
-            "success": "True",
-            "max_coverage": "0.1",
-            "state_dist": "5.0",
-            "final_latent_distance": "0.0",
-            "start_latent_distance": "0.0",
-            "planning_latency_sec": "0.1",
-            "final_coverage": "0.1",
-            "steps_taken": "2",
-            "skill_consistency": "0.0",
-            "video_path": "private/old/videos/episode_000.gif",
-        },
-        {
-            "method": "hierarchical",
-            "episode_idx": "0",
-            "episode_id": "2",
-            "start_index": "1",
-            "goal_index": "3",
-            "sampled_goal_gap": "2",
-            "success": "False",
-            "max_coverage": "0.99",
-            "state_dist": "1.0",
-            "final_latent_distance": "0.0",
-            "start_latent_distance": "0.0",
-            "planning_latency_sec": "0.2",
-            "final_coverage": "0.99",
-            "steps_taken": "2",
-            "skill_consistency": "0.0",
-            "video_path": "private/old/videos/episode_000.gif",
-        },
-    ]
-    summary = {
-        "flat": {
-            "unique_episodes": 1,
-            "coverage_success_rate": 0.0,
-            "goal_state_success_diagnostic_rate": 1.0,
-            "state_dist": 5.0,
-            "planning_latency_sec": 0.1,
-        },
-        "hierarchical": {
-            "unique_episodes": 1,
-            "coverage_success_rate": 1.0,
-            "goal_state_success_diagnostic_rate": 0.0,
-            "state_dist": 1.0,
-            "planning_latency_sec": 0.2,
-        },
-    }
-    monkeypatch.setattr(release_artifacts, "LOCKED_EVAL", eval_dir)
-    monkeypatch.setattr(release_artifacts, "LOCKED_REPORT", report_path)
+def test_release_refresh_reads_canonical_sanitized_locked_records(tmp_path: Path, monkeypatch):
+    records_path = tmp_path / "pusht_online_records_sanitized.csv"
+    records_path.write_text(
+        "\n".join(
+            [
+                "method,episode_idx,episode_id,max_coverage,goal_state_success,state_dist,planning_latency_sec",
+                "flat,0,2,0.10,True,5.0,0.1",
+                "hierarchical,0,2,0.99,False,1.0,0.2",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(release_artifacts, "LOCKED_RECORDS", records_path)
 
-    sanitized = release_artifacts.sanitize_locked_in_place(records, summary)
-    refreshed_summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    csv_text = records_path.read_text(encoding="utf-8")
+    records = release_artifacts.read_locked_records()
+    summary = release_artifacts.summarize_records(records)
 
-    assert refreshed_summary["cache_path"] == "external/legacy_debug_cache.h5"
-    assert refreshed_summary["flat"]["coverage_success_rate"] == 0.0
-    assert refreshed_summary["hierarchical"]["coverage_success_rate"] == 1.0
-    assert "success_rate" not in refreshed_summary["flat"]
-    assert "success_rate" not in refreshed_summary["hierarchical"]
-    assert refreshed_summary["flat"]["goal_state_success_scope"] == "trajectory_full_state_diagnostic"
-    assert "goal_state_success_rate" not in refreshed_summary["flat"]
-    assert "success" not in refreshed_summary["flat"]["records"][0]
-    assert sanitized[0]["coverage_success"] == "False"
-    assert sanitized[0]["goal_state_success"] == "True"
-    assert "success" not in csv_text.splitlines()[0].split(",")
-    assert "private/old" not in summary_path.read_text(encoding="utf-8")
+    assert all("success" not in row for row in records)
+    assert summary["flat"]["coverage_success_rate"] == 0.0
+    assert summary["flat"]["goal_state_success_diagnostic_rate"] == 1.0
+    assert summary["hierarchical"]["coverage_success_rate"] == 1.0
+    assert summary["hierarchical"]["goal_state_success_diagnostic_rate"] == 0.0
 
 
 def test_joint_requires_passive_checkpoint_when_low_level_checkpoint_is_set(tmp_path: Path, monkeypatch):

@@ -1,5 +1,0 @@
-planner:
-  high_level_horizon: 1
-  high_level_population: 1
-  high_level_elites: 1
-  high_level_iters: 1

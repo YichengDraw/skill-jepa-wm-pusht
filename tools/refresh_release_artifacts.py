@@ -20,8 +20,8 @@ from matplotlib.patches import FancyArrowPatch
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / "docs" / "architecture"
 RELEASE = ROOT / "artifacts" / "release"
-LOCKED_EVAL = ROOT / "artifacts" / "pusht_locked_suite" / "evals" / "current_best_checkpoint_100ep"
-LOCKED_REPORT = ROOT / "artifacts" / "pusht_locked_suite" / "reports" / "current_best_checkpoint_comparison.csv"
+SANITIZED_LOCKED = RELEASE / "sanitized_locked_artifacts"
+LOCKED_RECORDS = SANITIZED_LOCKED / "pusht_online_records_sanitized.csv"
 PHASE_A_ROOT = ROOT / "outputs" / "skill_jepa" / "phase_a_current_checkpoint"
 PHASE_A_OUTPUT = PHASE_A_ROOT / "eval"
 PHASE_A_ARTIFACT = ROOT / "artifacts" / "phase_a_current_checkpoint" / "evals"
@@ -228,8 +228,7 @@ def render_diagrams() -> None:
 
 
 def read_locked_records() -> list[dict]:
-    records_path = LOCKED_EVAL / "pusht_online_records.csv"
-    with open(records_path, "r", encoding="utf-8", newline="") as handle:
+    with open(LOCKED_RECORDS, "r", encoding="utf-8", newline="") as handle:
         return list(csv.DictReader(handle))
 
 
@@ -265,8 +264,6 @@ def strip_success_aliases(summary: dict) -> dict:
         payload = summary.get(method)
         if not isinstance(payload, dict):
             continue
-        if "coverage_success_rate" not in payload and "success_rate" in payload:
-            payload["coverage_success_rate"] = payload["success_rate"]
         if "goal_state_success_rate" in payload:
             payload["goal_state_success_diagnostic_rate"] = payload.pop("goal_state_success_rate")
         payload.pop("success_rate", None)
@@ -278,138 +275,6 @@ def strip_success_aliases(summary: dict) -> dict:
 
 def strip_success_column(rows: list[dict]) -> list[dict]:
     return [{key: value for key, value in row.items() if key != "success"} for row in rows]
-
-
-def _legacy_video_path(method: str, old_path: str | None) -> str | None:
-    if not old_path:
-        return None
-    name = Path(old_path).name
-    stem = Path(name).stem
-    if stem.startswith("episode_"):
-        return f"artifacts/pusht_locked_suite/visuals/{method}_{name}"
-    return name
-
-
-def sanitize_locked_in_place(records: list[dict], summary: dict[str, dict[str, float]]) -> list[dict]:
-    summary_path = LOCKED_EVAL / "pusht_online_eval.json"
-    if summary_path.exists():
-        payload = json.loads(summary_path.read_text(encoding="utf-8"))
-        payload["cache_path"] = "external/legacy_debug_cache.h5"
-        payload["checkpoint"] = "external/legacy_debug_joint_best.pt"
-        payload["external_inputs_not_committed"] = True
-        payload["legacy_artifact"] = True
-        payload["coverage_threshold"] = 0.95
-        payload["goal_mode"] = "trajectory"
-        payload["task_success_claim_supported"] = False
-        payload["deterministic_timing"] = False
-        payload["unique_episode_count"] = int(max((row["unique_episodes"] for row in summary.values()), default=0))
-        payload["provenance"] = {
-            "warnings": ["Legacy locked artifact predates the current strict provenance schema; external inputs are not committed"]
-        }
-        payload["success_semantics"] = "coverage_success and coverage_success_rate are coverage metrics after reliability re-score"
-        for method, method_summary in summary.items():
-            if method not in payload:
-                continue
-            payload[method]["coverage_success_rate"] = method_summary["coverage_success_rate"]
-            payload[method].pop("goal_state_success_rate", None)
-            payload[method]["goal_state_success_diagnostic_rate"] = method_summary["goal_state_success_diagnostic_rate"]
-            payload[method]["goal_state_success_is_task_metric"] = False
-            payload[method]["goal_state_success_scope"] = "trajectory_full_state_diagnostic"
-            payload[method]["unique_episode_count"] = int(method_summary["unique_episodes"])
-            payload[method].pop("success_rate", None)
-            for record in payload[method].get("records", []):
-                old_success = bool(record.get("success", False))
-                coverage_success = bool(float(record.get("max_coverage", 0.0)) >= 0.95)
-                record["goal_state_success"] = old_success
-                record["coverage_success"] = coverage_success
-                record.pop("success", None)
-                record["video_path"] = _legacy_video_path(method, record.get("video_path"))
-        strip_success_aliases(payload)
-        summary_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-
-    sanitized_records = []
-    for row in records:
-        cleaned = dict(row)
-        method = cleaned["method"]
-        goal_state_success = cleaned.get("goal_state_success") or cleaned.get("success", "False")
-        coverage_success = str(float(cleaned["max_coverage"]) >= 0.95)
-        cleaned["goal_state_success"] = goal_state_success
-        cleaned["coverage_success"] = coverage_success
-        cleaned.pop("success", None)
-        cleaned["video_path"] = _legacy_video_path(method, cleaned.get("video_path")) or ""
-        sanitized_records.append(cleaned)
-    records_path = LOCKED_EVAL / "pusht_online_records.csv"
-    fieldnames = [
-        "method",
-        "episode_idx",
-        "episode_id",
-        "start_index",
-        "goal_index",
-        "sampled_goal_gap",
-        "coverage_success",
-        "goal_state_success",
-        "state_dist",
-        "final_latent_distance",
-        "start_latent_distance",
-        "planning_latency_sec",
-        "max_coverage",
-        "final_coverage",
-        "steps_taken",
-        "skill_consistency",
-        "video_path",
-    ]
-    with open(records_path, "w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in sanitized_records:
-            writer.writerow({field: row.get(field, "") for field in fieldnames})
-
-    with open(LOCKED_REPORT, "w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(
-            handle,
-            fieldnames=[
-                "method",
-                "coverage_success_rate",
-                "goal_state_success_diagnostic_rate",
-                "state_dist",
-                "planning_latency_sec",
-            ],
-        )
-        writer.writeheader()
-        for method in ["hierarchical", "flat"]:
-            row = summary[method]
-            writer.writerow(
-                {
-                    "method": method,
-                    "coverage_success_rate": row["coverage_success_rate"],
-                    "goal_state_success_diagnostic_rate": row["goal_state_success_diagnostic_rate"],
-                    "state_dist": row["state_dist"],
-                    "planning_latency_sec": row["planning_latency_sec"],
-                }
-            )
-    return sanitized_records
-
-
-def write_sanitized_locked_artifacts(records: list[dict], summary: dict[str, dict[str, float]]) -> None:
-    out_dir = ensure_dir(RELEASE / "sanitized_locked_artifacts")
-    records_out = out_dir / "pusht_online_records_sanitized.csv"
-    with open(records_out, "w", encoding="utf-8", newline="") as handle:
-        fieldnames = list(records[0].keys())
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in records:
-            cleaned = dict(row)
-            if cleaned.get("video_path"):
-                cleaned["video_path"] = Path(cleaned["video_path"]).name
-            writer.writerow(cleaned)
-    payload = {
-        "source": "legacy locked artifact re-scored with coverage-first semantics",
-        "coverage_threshold": 0.95,
-        "goal_state_success_scope": "trajectory_full_state_diagnostic",
-        "goal_state_success_is_task_metric": False,
-        "methods": summary,
-    }
-    (out_dir / "pusht_online_eval_sanitized.json").write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def write_plots(records: list[dict], summary: dict[str, dict[str, float]]) -> dict[str, Path]:
@@ -472,12 +337,9 @@ def write_plots(records: list[dict], summary: dict[str, dict[str, float]]) -> di
 
 
 def write_montage() -> Path | None:
-    visual_dir = ROOT / "artifacts" / "pusht_locked_suite" / "visuals"
     gifs = [
-        ("Flat 000", visual_dir / "flat_episode_000.gif"),
-        ("Flat 001", visual_dir / "flat_episode_001.gif"),
-        ("Hierarchical 000", visual_dir / "hierarchical_episode_000.gif"),
-        ("Hierarchical 001", visual_dir / "hierarchical_episode_001.gif"),
+        ("Flat Phase A", PHASE_A_ARTIFACT / "videos" / "flat" / "episode_000.gif"),
+        ("Hierarchical Phase A", PHASE_A_ARTIFACT / "videos" / "hierarchical" / "episode_000.gif"),
     ]
     existing = [(label, path) for label, path in gifs if path.exists()]
     if not existing:
@@ -693,11 +555,9 @@ def main() -> None:
     render_diagrams()
     records = read_locked_records()
     summary = summarize_records(records)
-    records = sanitize_locked_in_place(records, summary)
-    write_sanitized_locked_artifacts(records, summary)
     plots = write_plots(records, summary)
-    montage = write_montage()
     phase_a = copy_phase_a_if_present(ingest_local_outputs=bool(args.ingest_local_phase_a))
+    montage = write_montage()
     write_report(summary, plots, montage, phase_a)
 
 

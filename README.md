@@ -28,13 +28,13 @@ Experiment flow:
 
 ![Skill-JEPA-WM experiment flow](docs/architecture/experiment_flow.svg)
 
-Hierarchical rollout:
+Hierarchical Phase A rollout:
 
-![Hierarchical rollout](artifacts/pusht_locked_suite/visuals/hierarchical_episode_000.gif)
+![Hierarchical rollout](artifacts/phase_a_current_checkpoint/evals/videos/hierarchical/episode_000.gif)
 
-Flat rollout:
+Flat Phase A rollout:
 
-![Flat rollout](artifacts/pusht_locked_suite/visuals/flat_episode_000.gif)
+![Flat rollout](artifacts/phase_a_current_checkpoint/evals/videos/flat/episode_000.gif)
 
 ## Repository Scope
 
@@ -92,7 +92,6 @@ $env:PUSHT_FULL_RAW_H5="<path-to-pusht_expert_train.h5>"
 - `tools/run_skill_jepa_pusht_locked_suite.py`: locked-suite orchestration script
 - `configs/exp/pusht_debug.yaml`: final debug protocol
 - `configs/exp/pusht_debug_k2.yaml`: `K=2` ablation
-- `configs/ablations/`: no-composition, no-effect-alignment, and no-hierarchy overrides
 - `artifacts/`: selected reports and evaluation outputs tracked in git
 
 ## Usage
@@ -187,8 +186,6 @@ The corrected evaluator was rerun against the available external debug cache/che
 - `artifacts/release/plots/`
 - `artifacts/release/sanitized_locked_artifacts/`
 - `artifacts/phase_a_current_checkpoint/evals/`
-- `artifacts/pusht_locked_suite/evals/current_best_checkpoint_100ep/pusht_online_eval.json`
-- `artifacts/pusht_locked_suite/evals/current_best_checkpoint_100ep/pusht_online_records.csv`
 
 ## Limitations
 
