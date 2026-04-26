@@ -11,9 +11,14 @@ Skill-JEPA-WM is a hierarchical world-model experiment built on top of `facebook
 - Coverage-first Push-T online evaluation with deterministic NumPy/Torch/CUDA/env reseeding
 - Strict checkpoint loading and train-split-only subgoal lookup for hierarchical eval
 - Rendered model-pipeline and experiment-flow diagrams under `docs/architecture/`
+- Conceptual core-idea illustration under `docs/architecture/`
 - Reliability report, re-scored legacy artifacts, evaluation CSVs, JSON summaries, and rollout GIFs
 
 ## Visual Summary
+
+Conceptual core idea and innovations:
+
+![Skill-JEPA-WM core idea and innovations](docs/architecture/core_idea_and_innovations.png)
 
 Model pipeline:
 
@@ -135,8 +140,11 @@ The rendered architecture sources are:
 - `docs/architecture/model_pipeline.svg`
 - `docs/architecture/experiment_flow.mmd`
 - `docs/architecture/experiment_flow.svg`
+- `docs/architecture/core_idea_and_innovations.png`
 
 The key runtime path is: raw Push-T HDF5 frames/actions/states -> causal two-frame V-JEPA2 cache -> `z_t` global latent and `s_t` spatial tokens -> skill-level and low-level world models -> CEM planning -> PushTEnv online control with live visual re-encoding.
+
+`docs/architecture/core_idea_and_innovations.png` is a conceptual illustration for readability. Treat the rendered Mermaid diagrams and source code as the implementation source of truth, and the tracked reports/JSON/CSV files as the evidence source of truth.
 
 ## Reported Results
 
